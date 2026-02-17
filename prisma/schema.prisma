@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(USER)
+  createdAt DateTime @default(now())
+
+  createdJobs Job[]    @relation("UserJobs")
+  partner     Partner?
+}
+
+model Job {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  createdAt   DateTime @default(now())
+
+  createdById String
+  createdBy   User   @relation("UserJobs", fields: [createdById], references: [id])
+
+  applications Application[]
+}
+
+model Candidate {
+  id        String   @id @default(uuid())
+  name      String
+  email     String
+  phone     String
+  createdAt DateTime @default(now())
+
+  createdByUserId    String?
+  createdByPartnerId String?
+
+  applications Application[]
+}
+
+model Application {
+  id        String            @id @default(uuid())
+  createdAt DateTime          @default(now())
+  status    ApplicationStatus @default(APPLIED)
+
+  jobId String
+  job   Job    @relation(fields: [jobId], references: [id])
+
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+
+  appliedByUserId    String?
+  appliedByPartnerId String?
+}
+
+enum ApplicationStatus {
+  APPLIED
+  HIRED
+  REJECTED
+}
+
+model Partner {
+  id           String        @id @default(uuid())
+  businessName String
+  phone        String
+  status       PartnerStatus @default(PENDING)
+  userId       String        @unique
+  user         User          @relation(fields: [userId], references: [id])
+  createdAt    DateTime      @default(now())
+}
+
+enum PartnerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum Role {
+  USER
+  PARTNER
+  ADMIN
+}
