@@ -1,5 +1,11 @@
 const prisma = require("../../config/prisma");
 
+function getSource(application) {
+  if (application.appliedByPartnerId) return "PARTNER";
+  if (application.appliedByUserId) return "DIRECT";
+  return "UNKNOWN";
+}
+
 async function applyToJob({
   jobId,
   candidateName,
@@ -7,8 +13,8 @@ async function applyToJob({
   candidatePhone,
   userId,
   role,
+  partnerId,
 }) {
-  // 1. check if job exists
   const job = await prisma.job.findUnique({
     where: { id: jobId },
   });
@@ -17,34 +23,29 @@ async function applyToJob({
     throw new Error("Job not found");
   }
 
-  // 2. check duplicate candidate for same user/partner
-  const existingCandidate = await prisma.candidate.findFirst({
+  // find or create candidate
+  let candidate = await prisma.candidate.findFirst({
     where: {
       email: candidateEmail,
       ...(role === "PARTNER"
-        ? { createdByPartnerId: userId }
+        ? { createdByPartnerId: partnerId }
         : { createdByUserId: userId }),
     },
   });
 
-  // reuse existing candidate if found, else create new
-  let candidate;
-
-  if (existingCandidate) {
-    candidate = existingCandidate;
-  } else {
+  if (!candidate) {
     candidate = await prisma.candidate.create({
       data: {
         name: candidateName,
         email: candidateEmail,
         phone: candidatePhone,
         createdByUserId: role === "USER" ? userId : null,
-        createdByPartnerId: role === "PARTNER" ? userId : null,
+        createdByPartnerId: role === "PARTNER" ? partnerId : null,
       },
     });
   }
 
-  // 3. check if already applied to same job
+  // prevent duplicate application
   const existingApplication = await prisma.application.findFirst({
     where: {
       jobId,
@@ -56,51 +57,93 @@ async function applyToJob({
     throw new Error("Candidate already applied to this job");
   }
 
-  // 4. create application
   const application = await prisma.application.create({
     data: {
-      job: {
-        connect: { id: jobId },
-      },
-      candidate: {
-        connect: { id: candidate.id },
-      },
+      jobId,
+      candidateId: candidate.id,
       appliedByUserId: role === "USER" ? userId : null,
-      appliedByPartnerId: role === "PARTNER" ? userId : null,
+      appliedByPartnerId: role === "PARTNER" ? partnerId : null,
     },
-    include: {
-      candidate: true,
-      job: true,
-    },
-  });
 
-  return application;
-}
-
-async function getMyApplications({ userId, role }) {
-  const whereCondition =
-    role === "PARTNER"
-      ? { appliedByPartnerId: userId }
-      : { appliedByUserId: userId };
-
-  const applications = await prisma.application.findMany({
-    where: whereCondition,
     include: {
       job: {
         select: {
           id: true,
           title: true,
-          description: true,
+          companyName: true,
         },
       },
+
       candidate: true,
+
+      appliedByPartner: {
+        select: {
+          id: true,
+          organisationName: true,
+        },
+      },
+
+      appliedByUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
     },
+  });
+
+  return {
+    ...application,
+    source: getSource(application),
+  };
+}
+
+async function getMyApplications({ userId, role, partnerId }) {
+  const where =
+    role === "PARTNER"
+      ? { appliedByPartnerId: partnerId }
+      : { appliedByUserId: userId };
+
+  const applications = await prisma.application.findMany({
+    where,
+
+    include: {
+      job: {
+        select: {
+          id: true,
+          title: true,
+          companyName: true,
+          location: true,
+        },
+      },
+
+      candidate: true,
+
+      appliedByPartner: {
+        select: {
+          id: true,
+          organisationName: true,
+        },
+      },
+
+      appliedByUser: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+
     orderBy: {
       createdAt: "desc",
     },
   });
 
-  return applications;
+  return applications.map((app) => ({
+    ...app,
+    source: getSource(app),
+  }));
 }
 
 async function getAllApplications() {
@@ -110,20 +153,103 @@ async function getAllApplications() {
         select: {
           id: true,
           title: true,
+          companyName: true,
         },
       },
+
       candidate: true,
+
+      appliedByPartner: {
+        select: {
+          id: true,
+          organisationName: true,
+        },
+      },
+
+      appliedByUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
     },
+
     orderBy: {
       createdAt: "desc",
     },
   });
 
-  return applications;
+  return applications.map((app) => ({
+    ...app,
+    source: getSource(app),
+  }));
+}
+
+async function updateApplicationStatus(applicationId, status) {
+  const validStatuses = ["APPLIED", "HIRED", "REJECTED"];
+
+  if (!validStatuses.includes(status)) {
+    throw new Error("Invalid status");
+  }
+
+  const application = await prisma.application.findUnique({
+    where: {
+      id: applicationId,
+    },
+  });
+
+  if (!application) {
+    throw new Error("Application not found");
+  }
+
+  const updatedApplication = await prisma.application.update({
+    where: {
+      id: applicationId,
+    },
+    data: {
+      status,
+    },
+
+    include: {
+      job: {
+        select: {
+          id: true,
+          title: true,
+          companyName: true,
+        },
+      },
+
+      candidate: true,
+
+      appliedByPartner: {
+        select: {
+          id: true,
+          organisationName: true,
+        },
+      },
+
+      appliedByUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
+    },
+  });
+
+  const source = updatedApplication.appliedByPartnerId ? "PARTNER" : "DIRECT";
+
+  return {
+    ...updatedApplication,
+    source,
+  };
 }
 
 module.exports = {
   applyToJob,
   getMyApplications,
   getAllApplications,
+  updateApplicationStatus,
 };

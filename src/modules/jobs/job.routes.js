@@ -17,4 +17,21 @@ router.post(
   jobController.uploadJobsCSV,
 );
 
+router.get("/:id", authMiddleware, jobController.getJobById);
+// UPDATE JOB
+router.patch(
+  "/:id",
+  authMiddleware,
+  requireRole("ADMIN"),
+  jobController.updateJob,
+);
+
+// DELETE JOB
+router.delete(
+  "/:id",
+  authMiddleware,
+  requireRole("ADMIN"),
+  jobController.deleteJob,
+);
+
 module.exports = router;

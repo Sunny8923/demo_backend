@@ -7,6 +7,7 @@ const authRoutes = require("./modules/auth/auth.routes");
 const jobRoutes = require("./modules/jobs/job.routes");
 const partnerRoutes = require("./modules/partners/partner.routes");
 const applicationRoutes = require("./modules/applications/application.routes");
+const dashboardRoutes = require("./modules/dashboard/dashboard.routes");
 
 const app = express();
 
@@ -19,7 +20,8 @@ app.get("/health", (req, res) => {
 
 app.use("/auth", authRoutes);
 app.use("/jobs", jobRoutes);
-app.use("/partners", partnerRoutes);
+app.use("/partner", partnerRoutes);
 app.use("/applications", applicationRoutes);
+app.use("/dashboard", dashboardRoutes);
 
 module.exports = app;

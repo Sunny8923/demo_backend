@@ -1,32 +1,99 @@
 const prisma = require("../../config/prisma");
+const bcrypt = require("bcrypt");
 
-async function createPartnerRequest({ userId, businessName, phone }) {
-  // check if already requested
-  const existing = await prisma.partner.findUnique({
-    where: {
-      userId,
-    },
+// Partner Signup (UPDATED)
+async function createPartnerSignup({
+  name,
+  email,
+  password,
+
+  organisationName,
+  ownerName,
+  establishmentDate,
+
+  gstNumber,
+  panNumber,
+
+  msmeRegistered,
+
+  address,
+
+  contactNumber,
+
+  officialEmail,
+}) {
+  // check if email already exists
+  const existingUser = await prisma.user.findUnique({
+    where: { email },
   });
 
-  if (existing) {
-    throw new Error("Partner request already exists");
+  if (existingUser) {
+    throw new Error("Email already registered");
   }
 
-  const partner = await prisma.partner.create({
-    data: {
-      businessName,
-      phone,
-      user: {
-        connect: {
-          id: userId,
-        },
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  // create user + partner in transaction
+  const result = await prisma.$transaction(async (tx) => {
+    // create user
+    const user = await tx.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        role: "PARTNER",
       },
-    },
+    });
+
+    // create partner profile
+    const partner = await tx.partner.create({
+      data: {
+        organisationName,
+        ownerName,
+
+        establishmentDate: new Date(establishmentDate),
+
+        gstNumber,
+        panNumber,
+
+        msmeRegistered: msmeRegistered === true,
+
+        address,
+
+        contactNumber,
+
+        officialEmail,
+
+        userId: user.id,
+
+        status: "PENDING",
+      },
+    });
+
+    return {
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+
+      partner: {
+        id: partner.id,
+        organisationName: partner.organisationName,
+        ownerName: partner.ownerName,
+        officialEmail: partner.officialEmail,
+        contactNumber: partner.contactNumber,
+        status: partner.status,
+        createdAt: partner.createdAt,
+      },
+    };
   });
 
-  return partner;
+  return result;
 }
 
+// Admin: get pending partners
 async function getPendingRequests() {
   const requests = await prisma.partner.findMany({
     where: {
@@ -49,8 +116,8 @@ async function getPendingRequests() {
   return requests;
 }
 
+// Admin: approve partner
 async function approvePartnerRequest(partnerId) {
-  // first get partner with userId
   const partner = await prisma.partner.findUnique({
     where: {
       id: partnerId,
@@ -58,39 +125,90 @@ async function approvePartnerRequest(partnerId) {
   });
 
   if (!partner) {
-    throw new Error("Partner request not found");
+    throw new Error("Partner not found");
   }
 
-  // use transaction to update both safely
-  const result = await prisma.$transaction(async (tx) => {
-    // update partner status
-    const updatedPartner = await tx.partner.update({
-      where: {
-        id: partnerId,
-      },
-      data: {
-        status: "APPROVED",
-      },
-    });
-
-    // update user role
-    await tx.user.update({
-      where: {
-        id: partner.userId,
-      },
-      data: {
-        role: "PARTNER",
-      },
-    });
-
-    return updatedPartner;
+  const updatedPartner = await prisma.partner.update({
+    where: {
+      id: partnerId,
+    },
+    data: {
+      status: "APPROVED",
+    },
   });
 
-  return result;
+  return updatedPartner;
+}
+
+async function getMyPartnerProfile(userId) {
+  const partner = await prisma.partner.findUnique({
+    where: {
+      userId,
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          createdAt: true,
+        },
+      },
+    },
+  });
+
+  if (!partner) {
+    throw new Error("Partner profile not found");
+  }
+
+  return partner;
+}
+
+// Admin: reject partner
+async function rejectPartnerRequest(partnerId) {
+  const partner = await prisma.partner.findUnique({
+    where: {
+      id: partnerId,
+    },
+  });
+
+  if (!partner) {
+    throw new Error("Partner not found");
+  }
+
+  if (partner.status === "REJECTED") {
+    throw new Error("Partner already rejected");
+  }
+
+  if (partner.status === "APPROVED") {
+    throw new Error("Approved partner cannot be rejected");
+  }
+
+  const updatedPartner = await prisma.partner.update({
+    where: {
+      id: partnerId,
+    },
+    data: {
+      status: "REJECTED",
+    },
+    select: {
+      id: true,
+      organisationName: true,
+      officialEmail: true,
+      contactNumber: true,
+      status: true,
+      createdAt: true,
+    },
+  });
+
+  return updatedPartner;
 }
 
 module.exports = {
-  createPartnerRequest,
+  createPartnerSignup,
   getPendingRequests,
   approvePartnerRequest,
+  getMyPartnerProfile,
+  rejectPartnerRequest,
 };

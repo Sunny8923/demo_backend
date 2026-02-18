@@ -2,24 +2,54 @@ const jobService = require("./job.service");
 
 async function createJob(req, res) {
   try {
-    // check admin role
     if (req.user.role !== "ADMIN") {
       return res.status(403).json({
         message: "Only admin can create jobs",
       });
     }
 
-    const { title, description } = req.body;
+    const {
+      jrCode,
+      title,
+      description,
+      companyName,
+      department,
+      location,
+      minExperience,
+      maxExperience,
+      salaryMin,
+      salaryMax,
+      openings,
+      skills,
+      education,
+      status,
+      requestDate,
+      closureDate,
+    } = req.body;
 
-    if (!title || !description) {
+    if (!title || !companyName || !location) {
       return res.status(400).json({
-        message: "Title and description required",
+        message: "title, companyName and location are required",
       });
     }
 
     const job = await jobService.createJob({
+      jrCode,
       title,
       description,
+      companyName,
+      department,
+      location,
+      minExperience,
+      maxExperience,
+      salaryMin,
+      salaryMax,
+      openings,
+      skills,
+      education,
+      status,
+      requestDate,
+      closureDate,
       createdById: req.user.userId,
     });
 
@@ -39,6 +69,7 @@ async function getAllJobs(req, res) {
     const jobs = await jobService.getAllJobs();
 
     res.json({
+      count: jobs.length,
       jobs,
     });
   } catch (error) {
@@ -50,7 +81,6 @@ async function getAllJobs(req, res) {
 
 async function uploadJobsCSV(req, res) {
   try {
-    // admin only
     if (req.user.role !== "ADMIN") {
       return res.status(403).json({
         message: "Only admin can upload CSV",
@@ -63,13 +93,88 @@ async function uploadJobsCSV(req, res) {
       });
     }
 
-    const count = await jobService.createJobsFromCSV(
+    const result = await jobService.createJobsFromCSV(
       req.file.path,
       req.user.userId,
     );
 
     res.json({
-      message: `${count} jobs uploaded successfully`,
+      message: result.success
+        ? "CSV uploaded successfully"
+        : "CSV upload failed",
+
+      summary: result.summary,
+
+      errors: result.errors,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+}
+
+async function getJobById(req, res) {
+  try {
+    const { id } = req.params;
+
+    const job = await jobService.getJobById(id);
+
+    res.json({
+      job,
+    });
+  } catch (error) {
+    if (error.message === "Job not found") {
+      return res.status(404).json({
+        message: "Job not found",
+      });
+    }
+
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+}
+
+// UPDATE JOB (ADMIN)
+async function updateJob(req, res) {
+  try {
+    if (req.user.role !== "ADMIN") {
+      return res.status(403).json({
+        message: "Only admin can update jobs",
+      });
+    }
+
+    const { id } = req.params;
+
+    const updatedJob = await jobService.updateJob(id, req.body);
+
+    res.json({
+      message: "Job updated successfully",
+      job: updatedJob,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+}
+
+// DELETE JOB (ADMIN)
+async function deleteJob(req, res) {
+  try {
+    if (req.user.role !== "ADMIN") {
+      return res.status(403).json({
+        message: "Only admin can delete jobs",
+      });
+    }
+
+    const { id } = req.params;
+
+    await jobService.deleteJob(id);
+
+    res.json({
+      message: "Job deleted successfully",
     });
   } catch (error) {
     res.status(500).json({
@@ -82,4 +187,7 @@ module.exports = {
   createJob,
   getAllJobs,
   uploadJobsCSV,
+  getJobById,
+  updateJob,
+  deleteJob,
 };

@@ -14,16 +14,43 @@ model User {
   role      Role     @default(USER)
   createdAt DateTime @default(now())
 
-  createdJobs Job[]    @relation("UserJobs")
-  partner     Partner?
+  createdJobs  Job[]         @relation("UserJobs")
+  partner      Partner?
+  applications Application[]
 }
 
 model Job {
-  id          String   @id @default(uuid())
-  title       String
-  description String
-  createdAt   DateTime @default(now())
+  id String @id @default(uuid())
 
+  // Core fields
+  jrCode      String? @unique // from CSV (JR Code)
+  title       String // Designation
+  description String? // Job Description
+  department  String?
+  companyName String? // Client Name
+  location    String?
+
+  // Experience
+  minExperience Int?
+  maxExperience Int?
+
+  // Salary
+  salaryMin Int?
+  salaryMax Int?
+
+  // Hiring info
+  openings  Int? // No. of Positions
+  skills    String? // Skills Required
+  education String? // Education Required
+
+  // Lifecycle
+  status      String? // Open, Closed, etc.
+  requestDate DateTime?
+  closureDate DateTime?
+
+  createdAt DateTime @default(now())
+
+  // Relation
   createdById String
   createdBy   User   @relation("UserJobs", fields: [createdById], references: [id])
 
@@ -54,8 +81,11 @@ model Application {
   candidateId String
   candidate   Candidate @relation(fields: [candidateId], references: [id])
 
-  appliedByUserId    String?
+  appliedByUserId String?
+  appliedByUser   User?   @relation(fields: [appliedByUserId], references: [id])
+
   appliedByPartnerId String?
+  appliedByPartner   Partner? @relation(fields: [appliedByPartnerId], references: [id])
 }
 
 enum ApplicationStatus {
@@ -65,13 +95,32 @@ enum ApplicationStatus {
 }
 
 model Partner {
-  id           String        @id @default(uuid())
-  businessName String
-  phone        String
-  status       PartnerStatus @default(PENDING)
-  userId       String        @unique
-  user         User          @relation(fields: [userId], references: [id])
+  id String @id @default(uuid())
+
+  // Organisation details
+  organisationName  String
+  ownerName         String
+  establishmentDate DateTime
+
+  gstNumber String
+  panNumber String
+
+  msmeRegistered Boolean @default(false)
+
+  address String
+
+  contactNumber String
+
+  officialEmail String
+
+  // status & relation
+  status PartnerStatus @default(PENDING)
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id])
+
   createdAt    DateTime      @default(now())
+  applications Application[]
 }
 
 enum PartnerStatus {
