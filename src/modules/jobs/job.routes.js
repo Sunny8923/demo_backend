@@ -4,6 +4,7 @@ const router = express.Router();
 const jobController = require("./job.controller");
 const authMiddleware = require("../../middlewares/auth.middleware");
 const upload = require("../../middlewares/upload.middleware");
+const requireRole = require("../../middlewares/requireRole.middleware");
 // create job (admin only)
 router.post("/", authMiddleware, jobController.createJob);
 

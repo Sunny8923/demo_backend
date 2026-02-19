@@ -1,21 +1,43 @@
 const applicationService = require("./application.service");
 
+////////////////////////////////////////////////////////
+/// APPLY TO JOB (UPGRADED FOR FULL CANDIDATE PROFILE)
+////////////////////////////////////////////////////////
+
 async function applyToJob(req, res) {
   try {
-    const { jobId, name, email, phone } = req.body;
+    const { jobId, candidate } = req.body;
 
-    if (!jobId || !name || !email || !phone) {
+    //////////////////////////////////////////////////////
+    // Validation
+    //////////////////////////////////////////////////////
+
+    if (!jobId) {
       return res.status(400).json({
-        message: "jobId, name, email and phone required",
+        message: "jobId is required",
       });
     }
+
+    if (!candidate) {
+      return res.status(400).json({
+        message: "candidate object is required",
+      });
+    }
+
+    if (!candidate.name || !candidate.email || !candidate.phone) {
+      return res.status(400).json({
+        message: "candidate name, email and phone are required",
+      });
+    }
+
+    //////////////////////////////////////////////////////
+    // Call service with FULL candidate profile
+    //////////////////////////////////////////////////////
 
     const application = await applicationService.applyToJob({
       jobId,
 
-      candidateName: name,
-      candidateEmail: email,
-      candidatePhone: phone,
+      candidateData: candidate,
 
       userId: req.user.userId,
 
@@ -23,6 +45,10 @@ async function applyToJob(req, res) {
 
       partnerId: req.partner?.id || null,
     });
+
+    //////////////////////////////////////////////////////
+    // Success response
+    //////////////////////////////////////////////////////
 
     res.status(201).json({
       message: "Application submitted successfully",
@@ -34,6 +60,10 @@ async function applyToJob(req, res) {
     });
   }
 }
+
+////////////////////////////////////////////////////////
+/// GET MY APPLICATIONS
+////////////////////////////////////////////////////////
 
 async function getMyApplications(req, res) {
   try {
@@ -53,6 +83,10 @@ async function getMyApplications(req, res) {
   }
 }
 
+////////////////////////////////////////////////////////
+/// GET ALL APPLICATIONS (ADMIN)
+////////////////////////////////////////////////////////
+
 async function getAllApplications(req, res) {
   try {
     const applications = await applicationService.getAllApplications();
@@ -67,6 +101,10 @@ async function getAllApplications(req, res) {
   }
 }
 
+////////////////////////////////////////////////////////
+/// UPDATE APPLICATION PIPELINE STAGE (ADMIN)
+////////////////////////////////////////////////////////
+
 async function updateApplicationStatus(req, res) {
   try {
     if (req.user.role !== "ADMIN") {
@@ -77,17 +115,17 @@ async function updateApplicationStatus(req, res) {
 
     const { id } = req.params;
 
-    const { status } = req.body;
+    const { pipelineStage } = req.body;
 
-    if (!status) {
+    if (!pipelineStage) {
       return res.status(400).json({
-        message: "Status is required",
+        message: "pipelineStage is required",
       });
     }
 
     const application = await applicationService.updateApplicationStatus(
       id,
-      status,
+      pipelineStage,
     );
 
     res.json({
@@ -100,6 +138,10 @@ async function updateApplicationStatus(req, res) {
     });
   }
 }
+
+////////////////////////////////////////////////////////
+/// EXPORTS
+////////////////////////////////////////////////////////
 
 module.exports = {
   applyToJob,

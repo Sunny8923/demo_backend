@@ -6,6 +6,10 @@ datasource db {
   provider = "postgresql"
 }
 
+////////////////////////////////////////////////////////////
+/// USER
+////////////////////////////////////////////////////////////
+
 model User {
   id        String   @id @default(uuid())
   name      String
@@ -14,20 +18,26 @@ model User {
   role      Role     @default(USER)
   createdAt DateTime @default(now())
 
-  createdJobs  Job[]         @relation("UserJobs")
-  partner      Partner?
-  applications Application[]
+  createdJobs Job[] @relation("UserJobs")
+
+  partner Partner?
+
+  applications Application[] @relation("UserApplications")
 }
+
+////////////////////////////////////////////////////////////
+/// JOB
+////////////////////////////////////////////////////////////
 
 model Job {
   id String @id @default(uuid())
 
   // Core fields
-  jrCode      String? @unique // from CSV (JR Code)
-  title       String // Designation
-  description String? // Job Description
+  jrCode      String? @unique
+  title       String
+  description String?
   department  String?
-  companyName String? // Client Name
+  companyName String?
   location    String?
 
   // Experience
@@ -39,41 +49,106 @@ model Job {
   salaryMax Int?
 
   // Hiring info
-  openings  Int? // No. of Positions
-  skills    String? // Skills Required
-  education String? // Education Required
+  openings  Int?
+  skills    String?
+  education String?
 
-  // Lifecycle
-  status      String? // Open, Closed, etc.
+  // Client tracking
+  clientName    String?
+  clientContact String?
+  clientEmail   String?
+
+  // Job lifecycle
+  status      JobStatus @default(OPEN)
   requestDate DateTime?
   closureDate DateTime?
 
-  createdAt DateTime @default(now())
+  // Analytics optimization
+  applicationsCount Int @default(0)
 
-  // Relation
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
   createdById String
   createdBy   User   @relation("UserJobs", fields: [createdById], references: [id])
 
   applications Application[]
+
+  @@index([status])
 }
 
-model Candidate {
-  id        String   @id @default(uuid())
-  name      String
-  email     String
-  phone     String
-  createdAt DateTime @default(now())
+enum JobStatus {
+  OPEN
+  CLOSED
+  ON_HOLD
+  CANCELLED
+}
 
+////////////////////////////////////////////////////////////
+/// CANDIDATE
+////////////////////////////////////////////////////////////
+
+model Candidate {
+  id String @id @default(uuid())
+
+  // Basic identity
+  name  String
+  email String
+  phone String
+
+  // Location info
+  currentLocation    String?
+  preferredLocations String?
+  hometown           String?
+  pincode            String?
+
+  // Professional info
+  totalExperience    Float?
+  currentCompany     String?
+  currentDesignation String?
+  department         String?
+  industry           String?
+  skills             String?
+  currentSalary      Float?
+  expectedSalary     Float?
+  noticePeriodDays   Int?
+
+  // Education info
+  highestQualification String?
+  specialization       String?
+  university           String?
+  graduationYear       Int?
+
+  // Personal info
+  dateOfBirth   DateTime?
+  gender        String?
+  maritalStatus String?
+
+  // Source tracking
   createdByUserId    String?
   createdByPartnerId String?
 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
   applications Application[]
+
+  @@unique([email, phone])
+  // Indexes and constraints
+  @@index([email])
+  @@index([phone])
 }
 
+////////////////////////////////////////////////////////////
+/// APPLICATION (CORE PIPELINE ENTITY)
+////////////////////////////////////////////////////////////
+
 model Application {
-  id        String            @id @default(uuid())
-  createdAt DateTime          @default(now())
-  status    ApplicationStatus @default(APPLIED)
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   jobId String
   job   Job    @relation(fields: [jobId], references: [id])
@@ -82,22 +157,66 @@ model Application {
   candidate   Candidate @relation(fields: [candidateId], references: [id])
 
   appliedByUserId String?
-  appliedByUser   User?   @relation(fields: [appliedByUserId], references: [id])
+  appliedByUser   User?   @relation("UserApplications", fields: [appliedByUserId], references: [id])
 
   appliedByPartnerId String?
-  appliedByPartner   Partner? @relation(fields: [appliedByPartnerId], references: [id])
+  appliedByPartner   Partner? @relation("PartnerApplications", fields: [appliedByPartnerId], references: [id])
+
+  pipelineStage ApplicationStage        @default(APPLIED)
+  finalStatus   ApplicationFinalStatus?
+
+  source          String?
+  notes           String?
+  rejectionReason String?
+
+  contactedAt          DateTime?
+  interviewScheduledAt DateTime?
+  interviewCompletedAt DateTime?
+  offerSentAt          DateTime?
+  offerAcceptedAt      DateTime?
+  offerRejectedAt      DateTime?
+  hiredAt              DateTime?
+  rejectedAt           DateTime?
+
+  @@unique([candidateId, jobId])
+  @@index([jobId])
+  @@index([candidateId])
+  @@index([pipelineStage])
+  @@index([finalStatus])
+  @@index([appliedByUserId])
+  @@index([appliedByPartnerId])
 }
 
-enum ApplicationStatus {
+enum ApplicationStage {
   APPLIED
+  SCREENING
+  CONTACTED
+  DOCUMENT_REQUESTED
+  DOCUMENT_RECEIVED
+  SUBMITTED_TO_CLIENT
+  INTERVIEW_SCHEDULED
+  INTERVIEW_COMPLETED
+  SHORTLISTED
+  OFFER_SENT
+  OFFER_ACCEPTED
+  OFFER_REJECTED
   HIRED
   REJECTED
 }
 
+enum ApplicationFinalStatus {
+  HIRED
+  REJECTED
+  WITHDRAWN
+}
+
+////////////////////////////////////////////////////////////
+/// PARTNER
+////////////////////////////////////////////////////////////
+
 model Partner {
   id String @id @default(uuid())
 
-  // Organisation details
   organisationName  String
   ownerName         String
   establishmentDate DateTime
@@ -107,20 +226,18 @@ model Partner {
 
   msmeRegistered Boolean @default(false)
 
-  address String
-
+  address       String
   contactNumber String
-
   officialEmail String
 
-  // status & relation
   status PartnerStatus @default(PENDING)
 
   userId String @unique
   user   User   @relation(fields: [userId], references: [id])
 
-  createdAt    DateTime      @default(now())
-  applications Application[]
+  createdAt DateTime @default(now())
+
+  applications Application[] @relation("PartnerApplications")
 }
 
 enum PartnerStatus {
@@ -128,6 +245,10 @@ enum PartnerStatus {
   APPROVED
   REJECTED
 }
+
+////////////////////////////////////////////////////////////
+/// ROLE
+////////////////////////////////////////////////////////////
 
 enum Role {
   USER

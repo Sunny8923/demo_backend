@@ -44,7 +44,7 @@ async function createJob({
       skills: skills || null,
       education: education || null,
 
-      status: status || "open",
+      status: normalizeStatus(status) || "OPEN",
 
       requestDate: requestDate ? new Date(requestDate) : null,
       closureDate: closureDate ? new Date(closureDate) : null,
@@ -191,7 +191,7 @@ async function createJobsFromCSV(filePath, createdById) {
 
             education: get("Education Required") || null,
 
-            status: get("Status") || "open",
+            status: normalizeStatus(get("Status")) || "OPEN",
 
             requestDate:
               get("Request Date") || get("Start Date")
@@ -275,6 +275,16 @@ async function createJobsFromCSV(filePath, createdById) {
 
       .on("error", reject);
   });
+}
+
+function normalizeStatus(status) {
+  if (!status) return "OPEN";
+
+  const normalized = status.toString().trim().toUpperCase();
+
+  const allowed = ["OPEN", "CLOSED", "ON_HOLD", "CANCELLED"];
+
+  return allowed.includes(normalized) ? normalized : "OPEN";
 }
 
 async function getJobById(jobId) {

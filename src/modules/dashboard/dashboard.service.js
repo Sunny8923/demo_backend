@@ -3,13 +3,18 @@ const prisma = require("../../config/prisma");
 // ADMIN DASHBOARD
 async function getAdminDashboard() {
   const [
+    totalUsers,
+
     totalJobs,
-    activeJobs,
+    openJobs,
     closedJobs,
+    onHoldJobs,
+    cancelledJobs,
 
     totalPartners,
     pendingPartners,
     approvedPartners,
+    rejectedPartners,
 
     totalCandidates,
 
@@ -18,14 +23,24 @@ async function getAdminDashboard() {
     recentJobs,
     recentPartners,
   ] = await Promise.all([
+    prisma.user.count(),
+
     prisma.job.count(),
 
     prisma.job.count({
-      where: { status: "open" },
+      where: { status: "OPEN" },
     }),
 
     prisma.job.count({
-      where: { status: "closed" },
+      where: { status: "CLOSED" },
+    }),
+
+    prisma.job.count({
+      where: { status: "ON_HOLD" },
+    }),
+
+    prisma.job.count({
+      where: { status: "CANCELLED" },
     }),
 
     prisma.partner.count(),
@@ -36,6 +51,10 @@ async function getAdminDashboard() {
 
     prisma.partner.count({
       where: { status: "APPROVED" },
+    }),
+
+    prisma.partner.count({
+      where: { status: "REJECTED" },
     }),
 
     prisma.candidate.count(),
@@ -49,6 +68,7 @@ async function getAdminDashboard() {
         id: true,
         title: true,
         companyName: true,
+        status: true,
         createdAt: true,
       },
     }),
@@ -66,16 +86,23 @@ async function getAdminDashboard() {
   ]);
 
   return {
+    users: {
+      total: totalUsers,
+    },
+
     jobs: {
       total: totalJobs,
-      active: activeJobs,
+      open: openJobs,
       closed: closedJobs,
+      onHold: onHoldJobs,
+      cancelled: cancelledJobs,
     },
 
     partners: {
       total: totalPartners,
       pending: pendingPartners,
       approved: approvedPartners,
+      rejected: rejectedPartners,
     },
 
     candidates: {
@@ -115,21 +142,21 @@ async function getPartnerDashboard(partnerId) {
     prisma.application.count({
       where: {
         appliedByPartnerId: partnerId,
-        status: "APPLIED",
+        pipelineStage: "APPLIED", // ✅ FIXED
       },
     }),
 
     prisma.application.count({
       where: {
         appliedByPartnerId: partnerId,
-        status: "HIRED",
+        finalStatus: "HIRED", // ✅ FIXED
       },
     }),
 
     prisma.application.count({
       where: {
         appliedByPartnerId: partnerId,
-        status: "REJECTED",
+        finalStatus: "REJECTED", // ✅ FIXED
       },
     }),
   ]);
@@ -160,21 +187,21 @@ async function getUserDashboard(userId) {
     prisma.application.count({
       where: {
         appliedByUserId: userId,
-        status: "APPLIED",
+        pipelineStage: "APPLIED", // ✅ FIXED
       },
     }),
 
     prisma.application.count({
       where: {
         appliedByUserId: userId,
-        status: "HIRED",
+        finalStatus: "HIRED", // ✅ FIXED
       },
     }),
 
     prisma.application.count({
       where: {
         appliedByUserId: userId,
-        status: "REJECTED",
+        finalStatus: "REJECTED", // ✅ FIXED
       },
     }),
   ]);
