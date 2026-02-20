@@ -2,24 +2,45 @@ const express = require("express");
 const router = express.Router();
 
 const jobController = require("./job.controller");
-const authMiddleware = require("../../middlewares/auth.middleware");
-const upload = require("../../middlewares/upload.middleware");
-const requireRole = require("../../middlewares/requireRole.middleware");
-// create job (admin only)
-router.post("/", authMiddleware, jobController.createJob);
 
-// get all jobs (logged in users)
+const authMiddleware = require("../../middlewares/auth.middleware");
+const requireRole = require("../../middlewares/requireRole.middleware");
+const upload = require("../../middlewares/upload.middleware");
+
+////////////////////////////////////////////////////////
+// CREATE JOB (ADMIN ONLY)
+////////////////////////////////////////////////////////
+
+router.post("/", authMiddleware, requireRole("ADMIN"), jobController.createJob);
+
+////////////////////////////////////////////////////////
+// GET ALL JOBS
+////////////////////////////////////////////////////////
+
 router.get("/", authMiddleware, jobController.getAllJobs);
-// upload CSV (admin only)
+
+////////////////////////////////////////////////////////
+// CSV UPLOAD (ADMIN ONLY)
+////////////////////////////////////////////////////////
+
 router.post(
   "/upload-csv",
   authMiddleware,
+  requireRole("ADMIN"),
   upload.single("file"),
   jobController.uploadJobsCSV,
 );
 
+////////////////////////////////////////////////////////
+// GET JOB BY ID
+////////////////////////////////////////////////////////
+
 router.get("/:id", authMiddleware, jobController.getJobById);
-// UPDATE JOB
+
+////////////////////////////////////////////////////////
+// UPDATE JOB (ADMIN ONLY)
+////////////////////////////////////////////////////////
+
 router.patch(
   "/:id",
   authMiddleware,
@@ -27,7 +48,10 @@ router.patch(
   jobController.updateJob,
 );
 
-// DELETE JOB
+////////////////////////////////////////////////////////
+// DELETE JOB (ADMIN ONLY)
+////////////////////////////////////////////////////////
+
 router.delete(
   "/:id",
   authMiddleware,

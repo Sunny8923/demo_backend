@@ -4,14 +4,13 @@ const router = express.Router();
 const applicationController = require("./application.controller");
 
 const authMiddleware = require("../../middlewares/auth.middleware");
+
 const requireRole = require("../../middlewares/requireRole.middleware");
-const requirePartnerApproved = require("../../middlewares/requirePartnerApproved.middleware");
 
 router.post(
   "/apply",
   authMiddleware,
   requireRole("USER", "PARTNER"),
-  requirePartnerApproved,
   applicationController.applyToJob,
 );
 
@@ -19,7 +18,6 @@ router.get(
   "/my",
   authMiddleware,
   requireRole("USER", "PARTNER"),
-  requirePartnerApproved,
   applicationController.getMyApplications,
 );
 

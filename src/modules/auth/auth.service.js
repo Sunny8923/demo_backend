@@ -2,88 +2,165 @@ const prisma = require("../../config/prisma");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
+////////////////////////////////////////////////////////
+// VERIFY JWT SECRET
+////////////////////////////////////////////////////////
+
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET is not defined in environment variables");
+}
+
+////////////////////////////////////////////////////////
+// SIGNUP
+////////////////////////////////////////////////////////
+
 async function signup({ name, email, password }) {
-  // check if user already exists
+  //////////////////////////////////////////////////////
+  // NORMALIZE EMAIL
+  //////////////////////////////////////////////////////
+
+  email = email.toLowerCase().trim();
+
+  //////////////////////////////////////////////////////
+  // CHECK EXISTING USER
+  //////////////////////////////////////////////////////
+
   const existingUser = await prisma.user.findUnique({
     where: { email },
   });
 
-  if (existingUser) {
-    throw new Error("Email already registered");
-  }
+  if (existingUser) throw new Error("Email already registered");
 
-  // hash password
+  //////////////////////////////////////////////////////
+  // HASH PASSWORD
+  //////////////////////////////////////////////////////
+
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  // create user
+  //////////////////////////////////////////////////////
+  // CREATE USER
+  //////////////////////////////////////////////////////
+
   const user = await prisma.user.create({
     data: {
-      name,
+      name: name.trim(),
+
       email,
+
       password: hashedPassword,
+
       role: "USER",
     },
-  });
 
-  // remove password before returning
-  delete user.password;
-
-  return user;
-}
-
-async function login({ email, password }) {
-  // find user
-  const user = await prisma.user.findUnique({
-    where: { email },
-  });
-
-  if (!user) {
-    throw new Error("Invalid email or password");
-  }
-
-  // compare password
-  const isPasswordValid = await bcrypt.compare(password, user.password);
-
-  if (!isPasswordValid) {
-    throw new Error("Invalid email or password");
-  }
-
-  // generate JWT token
-  const token = jwt.sign(
-    {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-    },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: "7d",
-    },
-  );
-
-  // remove password
-  delete user.password;
-
-  return {
-    user,
-    token,
-  };
-}
-
-async function getCurrentUser(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
     select: {
       id: true,
+
       name: true,
+
       email: true,
+
       role: true,
+
       createdAt: true,
     },
   });
 
   return user;
 }
+
+////////////////////////////////////////////////////////
+// LOGIN
+////////////////////////////////////////////////////////
+
+async function login({ email, password }) {
+  email = email.toLowerCase().trim();
+
+  //////////////////////////////////////////////////////
+  // FIND USER
+  //////////////////////////////////////////////////////
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+  });
+
+  if (!user) throw new Error("Invalid email or password");
+
+  //////////////////////////////////////////////////////
+  // VERIFY PASSWORD
+  //////////////////////////////////////////////////////
+
+  const valid = await bcrypt.compare(password, user.password);
+
+  if (!valid) throw new Error("Invalid email or password");
+
+  //////////////////////////////////////////////////////
+  // GENERATE TOKEN
+  //////////////////////////////////////////////////////
+
+  const token = jwt.sign(
+    {
+      userId: user.id,
+
+      email: user.email,
+
+      role: user.role,
+    },
+
+    process.env.JWT_SECRET,
+
+    {
+      expiresIn: "7d",
+    },
+  );
+
+  //////////////////////////////////////////////////////
+  // RETURN SAFE USER
+  //////////////////////////////////////////////////////
+
+  return {
+    token,
+
+    user: {
+      id: user.id,
+
+      name: user.name,
+
+      email: user.email,
+
+      role: user.role,
+
+      createdAt: user.createdAt,
+    },
+  };
+}
+
+////////////////////////////////////////////////////////
+// GET CURRENT USER
+////////////////////////////////////////////////////////
+
+async function getCurrentUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+
+    select: {
+      id: true,
+
+      name: true,
+
+      email: true,
+
+      role: true,
+
+      createdAt: true,
+    },
+  });
+
+  if (!user) throw new Error("User not found");
+
+  return user;
+}
+
+////////////////////////////////////////////////////////
 
 module.exports = {
   signup,

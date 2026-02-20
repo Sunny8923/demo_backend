@@ -1,7 +1,7 @@
 const applicationService = require("./application.service");
 
 ////////////////////////////////////////////////////////
-/// APPLY TO JOB (UPGRADED FOR FULL CANDIDATE PROFILE)
+// APPLY TO JOB
 ////////////////////////////////////////////////////////
 
 async function applyToJob(req, res) {
@@ -9,29 +9,35 @@ async function applyToJob(req, res) {
     const { jobId, candidate } = req.body;
 
     //////////////////////////////////////////////////////
-    // Validation
+    // VALIDATION
     //////////////////////////////////////////////////////
 
     if (!jobId) {
       return res.status(400).json({
+        success: false,
+
         message: "jobId is required",
       });
     }
 
     if (!candidate) {
       return res.status(400).json({
+        success: false,
+
         message: "candidate object is required",
       });
     }
 
     if (!candidate.name || !candidate.email || !candidate.phone) {
       return res.status(400).json({
+        success: false,
+
         message: "candidate name, email and phone are required",
       });
     }
 
     //////////////////////////////////////////////////////
-    // Call service with FULL candidate profile
+    // SERVICE CALL
     //////////////////////////////////////////////////////
 
     const application = await applicationService.applyToJob({
@@ -47,105 +53,135 @@ async function applyToJob(req, res) {
     });
 
     //////////////////////////////////////////////////////
-    // Success response
+    // RESPONSE
     //////////////////////////////////////////////////////
 
-    res.status(201).json({
+    return res.status(201).json({
+      success: true,
+
       message: "Application submitted successfully",
-      application,
+
+      data: application,
     });
   } catch (error) {
-    res.status(500).json({
-      message: error.message,
+    console.error("Apply error:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message || "Failed to apply",
     });
   }
 }
 
 ////////////////////////////////////////////////////////
-/// GET MY APPLICATIONS
+// GET MY APPLICATIONS
 ////////////////////////////////////////////////////////
 
 async function getMyApplications(req, res) {
   try {
     const applications = await applicationService.getMyApplications({
       userId: req.user.userId,
+
       role: req.user.role,
+
       partnerId: req.partner?.id || null,
     });
 
-    res.json({
-      applications,
+    return res.json({
+      success: true,
+
+      count: applications.length,
+
+      data: applications,
     });
   } catch (error) {
-    res.status(500).json({
-      message: error.message,
+    console.error("Get my applications error:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message || "Failed to fetch applications",
     });
   }
 }
 
 ////////////////////////////////////////////////////////
-/// GET ALL APPLICATIONS (ADMIN)
+// GET ALL APPLICATIONS (ADMIN)
 ////////////////////////////////////////////////////////
 
 async function getAllApplications(req, res) {
   try {
     const applications = await applicationService.getAllApplications();
 
-    res.json({
-      applications,
+    return res.json({
+      success: true,
+
+      count: applications.length,
+
+      data: applications,
     });
   } catch (error) {
-    res.status(500).json({
-      message: error.message,
+    console.error("Get all applications error:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message || "Failed to fetch applications",
     });
   }
 }
 
 ////////////////////////////////////////////////////////
-/// UPDATE APPLICATION PIPELINE STAGE (ADMIN)
+// UPDATE APPLICATION STATUS
 ////////////////////////////////////////////////////////
 
 async function updateApplicationStatus(req, res) {
   try {
-    if (req.user.role !== "ADMIN") {
-      return res.status(403).json({
-        message: "Only admin can update application status",
-      });
-    }
-
     const { id } = req.params;
 
     const { pipelineStage } = req.body;
 
     if (!pipelineStage) {
       return res.status(400).json({
+        success: false,
+
         message: "pipelineStage is required",
       });
     }
 
     const application = await applicationService.updateApplicationStatus(
       id,
+
       pipelineStage,
     );
 
-    res.json({
+    return res.json({
+      success: true,
+
       message: "Application status updated successfully",
-      application,
+
+      data: application,
     });
   } catch (error) {
-    res.status(500).json({
-      message: error.message,
+    console.error("Update application error:", error);
+
+    return res.status(500).json({
+      success: false,
+
+      message: error.message || "Failed to update application",
     });
   }
 }
 
 ////////////////////////////////////////////////////////
-/// EXPORTS
-////////////////////////////////////////////////////////
 
 module.exports = {
   applyToJob,
+
   getMyApplications,
+
   getAllApplications,
+
   updateApplicationStatus,
 };
