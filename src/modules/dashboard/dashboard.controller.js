@@ -57,6 +57,8 @@ async function getPartnerDashboard(req, res) {
 // USER DASHBOARD
 async function getUserDashboard(req, res) {
   try {
+    console.log("REQ.USER =", req.user);
+
     if (req.user.role !== "USER") {
       return res.status(403).json({
         success: false,
@@ -64,7 +66,7 @@ async function getUserDashboard(req, res) {
       });
     }
 
-    const userId = req.user.id; // FIXED
+    const userId = req.user.userId; // ✅ CORRECT FIX
 
     const dashboard = await dashboardService.getUserDashboard(userId);
 
