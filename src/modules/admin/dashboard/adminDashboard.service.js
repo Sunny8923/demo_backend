@@ -7,19 +7,15 @@ const prisma = require("../../../config/prisma");
 function fillMissingDates(data, startDate, days) {
   const map = {};
 
-  // Convert DB result into map
   data.forEach((item) => {
     const date = new Date(item.date).toISOString().split("T")[0];
-
     map[date] = item.count;
   });
 
   const result = [];
 
-  // Generate all dates in range
   for (let i = 0; i < days; i++) {
     const d = new Date(startDate);
-
     d.setDate(startDate.getDate() + i);
 
     const date = d.toISOString().split("T")[0];
@@ -35,7 +31,7 @@ function fillMissingDates(data, startDate, days) {
 
 async function getAdminDashboard(range = "7d") {
   //////////////////////////////////////////////////////
-  // DATE RANGE (FIXED - SINGLE SOURCE OF TRUTH)
+  // DATE RANGE
   //////////////////////////////////////////////////////
 
   let days = 7;
@@ -61,10 +57,17 @@ async function getAdminDashboard(range = "7d") {
     closedJobs,
 
     totalApplications,
-
     activeApplications,
     hiredApplications,
     rejectedApplications,
+
+    //////////////////////////////////////////////////////
+    // NEW — RECRUITER SUMMARY
+    //////////////////////////////////////////////////////
+
+    totalRecruiters,
+
+    activeRecruiterApplicationsDistinct,
   ] = await Promise.all([
     prisma.partner.count(),
 
@@ -99,7 +102,34 @@ async function getAdminDashboard(range = "7d") {
     prisma.application.count({
       where: { finalStatus: "REJECTED" },
     }),
+
+    //////////////////////////////////////////////////////
+    // TOTAL RECRUITERS
+    //////////////////////////////////////////////////////
+
+    prisma.user.count({
+      where: { role: "RECRUITER" },
+    }),
+
+    //////////////////////////////////////////////////////
+    // ACTIVE RECRUITERS (distinct recruiters who applied ≥1 candidate)
+    //////////////////////////////////////////////////////
+
+    prisma.application.findMany({
+      where: {
+        appliedByUserId: { not: null },
+        appliedByUser: {
+          role: "RECRUITER",
+        },
+      },
+      select: {
+        appliedByUserId: true,
+      },
+      distinct: ["appliedByUserId"],
+    }),
   ]);
+
+  const activeRecruiters = activeRecruiterApplicationsDistinct.length;
 
   //////////////////////////////////////////////////////
   // PIPELINE
@@ -132,22 +162,19 @@ async function getAdminDashboard(range = "7d") {
   });
 
   //////////////////////////////////////////////////////
-  // TRENDS (NOW USES RANGE startDate)
+  // TRENDS
   //////////////////////////////////////////////////////
 
   const applicationsTrendRaw = await prisma.$queryRaw`
-
     SELECT DATE("createdAt") as date,
            COUNT(*)::int as count
     FROM "Application"
     WHERE "createdAt" >= ${startDate}
     GROUP BY DATE("createdAt")
     ORDER BY DATE("createdAt")
-
   `;
 
   const hiresTrendRaw = await prisma.$queryRaw`
-
     SELECT DATE("hiredAt") as date,
            COUNT(*)::int as count
     FROM "Application"
@@ -155,53 +182,65 @@ async function getAdminDashboard(range = "7d") {
     AND "hiredAt" >= ${startDate}
     GROUP BY DATE("hiredAt")
     ORDER BY DATE("hiredAt")
-
   `;
 
   const jobsTrendRaw = await prisma.$queryRaw`
-
     SELECT DATE("createdAt") as date,
            COUNT(*)::int as count
     FROM "Job"
     WHERE "createdAt" >= ${startDate}
     GROUP BY DATE("createdAt")
     ORDER BY DATE("createdAt")
-
   `;
 
   const trends = {
     applications: fillMissingDates(applicationsTrendRaw, startDate, days),
-
     hires: fillMissingDates(hiresTrendRaw, startDate, days),
-
     jobsCreated: fillMissingDates(jobsTrendRaw, startDate, days),
   };
 
   //////////////////////////////////////////////////////
-  // DISTRIBUTION
+  // DISTRIBUTION (FIXED WITH RECRUITER SPLIT)
   //////////////////////////////////////////////////////
 
-  const [partnerApplications, userApplications] = await Promise.all([
-    prisma.application.count({
-      where: {
-        appliedByPartnerId: { not: null },
-      },
-    }),
+  const [partnerApplications, recruiterApplications, directUserApplications] =
+    await Promise.all([
+      prisma.application.count({
+        where: {
+          appliedByPartnerId: { not: null },
+        },
+      }),
 
-    prisma.application.count({
-      where: {
-        appliedByUserId: { not: null },
-      },
-    }),
-  ]);
+      prisma.application.count({
+        where: {
+          appliedByUserId: { not: null },
+          appliedByUser: {
+            role: "RECRUITER",
+          },
+        },
+      }),
+
+      prisma.application.count({
+        where: {
+          appliedByUserId: { not: null },
+          appliedByUser: {
+            role: "USER",
+          },
+        },
+      }),
+    ]);
 
   const applicationsBySource = {
+    recruiter: recruiterApplications,
     partner: partnerApplications,
-    user: userApplications,
+    user: directUserApplications,
   };
 
-  const applicationsByDepartment = await prisma.$queryRaw`
+  //////////////////////////////////////////////////////
+  // APPLICATIONS BY DEPARTMENT
+  //////////////////////////////////////////////////////
 
+  const applicationsByDepartment = await prisma.$queryRaw`
     SELECT j."department",
            COUNT(a.id)::int as applications
     FROM "Application" a
@@ -209,8 +248,11 @@ async function getAdminDashboard(range = "7d") {
     WHERE j."department" IS NOT NULL
     GROUP BY j."department"
     ORDER BY applications DESC
-
   `;
+
+  //////////////////////////////////////////////////////
+  // TOP JOBS
+  //////////////////////////////////////////////////////
 
   const topJobsRaw = await prisma.job.findMany({
     take: 5,
@@ -277,6 +319,10 @@ async function getAdminDashboard(range = "7d") {
     applications: p._count.appliedByPartnerId,
   }));
 
+  //////////////////////////////////////////////////////
+  // FIXED TOP RECRUITERS (ONLY ROLE=RECRUITER)
+  //////////////////////////////////////////////////////
+
   const topRecruitersRaw = await prisma.application.groupBy({
     by: ["appliedByUserId"],
     _count: { appliedByUserId: true },
@@ -288,14 +334,17 @@ async function getAdminDashboard(range = "7d") {
     take: 5,
     where: {
       appliedByUserId: { not: null },
+      appliedByUser: {
+        role: "RECRUITER",
+      },
     },
   });
 
-  const userIds = topRecruitersRaw.map((u) => u.appliedByUserId);
+  const recruiterIds = topRecruitersRaw.map((u) => u.appliedByUserId);
 
-  const users = await prisma.user.findMany({
+  const recruiters = await prisma.user.findMany({
     where: {
-      id: { in: userIds },
+      id: { in: recruiterIds },
     },
     select: {
       id: true,
@@ -303,14 +352,14 @@ async function getAdminDashboard(range = "7d") {
     },
   });
 
-  const userMap = {};
-  users.forEach((u) => {
-    userMap[u.id] = u.name;
+  const recruiterMap = {};
+  recruiters.forEach((r) => {
+    recruiterMap[r.id] = r.name;
   });
 
   const topRecruiters = topRecruitersRaw.map((u) => ({
     userId: u.appliedByUserId,
-    userName: userMap[u.appliedByUserId] || "Unknown",
+    userName: recruiterMap[u.appliedByUserId] || "Unknown",
     applications: u._count.appliedByUserId,
   }));
 
@@ -329,21 +378,15 @@ async function getAdminDashboard(range = "7d") {
       prisma.application.count(),
 
       prisma.application.count({
-        where: {
-          pipelineStage: "SCREENING",
-        },
+        where: { pipelineStage: "SCREENING" },
       }),
 
       prisma.application.count({
-        where: {
-          pipelineStage: "INTERVIEW_SCHEDULED",
-        },
+        where: { pipelineStage: "INTERVIEW_SCHEDULED" },
       }),
 
       prisma.application.count({
-        where: {
-          pipelineStage: "HIRED",
-        },
+        where: { pipelineStage: "HIRED" },
       }),
     ]);
 
@@ -354,13 +397,138 @@ async function getAdminDashboard(range = "7d") {
 
   const conversion = {
     applicationToHireRate: calculateRate(hiredCount, totalApps),
-
     screeningToInterviewRate: calculateRate(
       interviewScheduledCount,
       screeningCount,
     ),
-
     interviewToHireRate: calculateRate(hiredCount, interviewScheduledCount),
+  };
+
+  //////////////////////////////////////////////////////
+  // SUMMARY CHANGE (NOW INCLUDES RECRUITERS)
+  //////////////////////////////////////////////////////
+
+  const currentStartDate = new Date(startDate);
+
+  const previousStartDate = new Date(startDate);
+  previousStartDate.setDate(previousStartDate.getDate() - days);
+
+  const previousEndDate = new Date(startDate);
+  previousEndDate.setMilliseconds(-1);
+
+  const [
+    currentJobs,
+    previousJobs,
+    currentApplications,
+    previousApplications,
+    currentPartners,
+    previousPartners,
+    currentHired,
+    previousHired,
+
+    //////////////////////////////////////////////////////
+    // NEW — RECRUITERS CHANGE
+    //////////////////////////////////////////////////////
+
+    currentRecruiters,
+    previousRecruiters,
+  ] = await Promise.all([
+    prisma.job.count({
+      where: { createdAt: { gte: currentStartDate } },
+    }),
+
+    prisma.job.count({
+      where: {
+        createdAt: {
+          gte: previousStartDate,
+          lte: previousEndDate,
+        },
+      },
+    }),
+
+    prisma.application.count({
+      where: { createdAt: { gte: currentStartDate } },
+    }),
+
+    prisma.application.count({
+      where: {
+        createdAt: {
+          gte: previousStartDate,
+          lte: previousEndDate,
+        },
+      },
+    }),
+
+    prisma.partner.count({
+      where: { createdAt: { gte: currentStartDate } },
+    }),
+
+    prisma.partner.count({
+      where: {
+        createdAt: {
+          gte: previousStartDate,
+          lte: previousEndDate,
+        },
+      },
+    }),
+
+    prisma.application.count({
+      where: {
+        finalStatus: "HIRED",
+        hiredAt: { gte: currentStartDate },
+      },
+    }),
+
+    prisma.application.count({
+      where: {
+        finalStatus: "HIRED",
+        hiredAt: {
+          gte: previousStartDate,
+          lte: previousEndDate,
+        },
+      },
+    }),
+
+    //////////////////////////////////////////////////////
+    // RECRUITER CHANGE
+    //////////////////////////////////////////////////////
+
+    prisma.user.count({
+      where: {
+        role: "RECRUITER",
+        createdAt: { gte: currentStartDate },
+      },
+    }),
+
+    prisma.user.count({
+      where: {
+        role: "RECRUITER",
+        createdAt: {
+          gte: previousStartDate,
+          lte: previousEndDate,
+        },
+      },
+    }),
+  ]);
+
+  function calculateChange(current, previous) {
+    if (!previous) {
+      if (!current) return 0;
+      return 100;
+    }
+
+    return Number((((current - previous) / previous) * 100).toFixed(1));
+  }
+
+  const summaryChange = {
+    totalJobs: calculateChange(currentJobs, previousJobs),
+    totalApplications: calculateChange(
+      currentApplications,
+      previousApplications,
+    ),
+    totalPartners: calculateChange(currentPartners, previousPartners),
+    totalRecruiters: calculateChange(currentRecruiters, previousRecruiters),
+    hired: calculateChange(currentHired, previousHired),
   };
 
   //////////////////////////////////////////////////////
@@ -374,14 +542,21 @@ async function getAdminDashboard(range = "7d") {
       totalPartners,
       activePartners,
       pendingPartners,
+
+      totalRecruiters,
+      activeRecruiters,
+
       totalJobs,
       openJobs,
       closedJobs,
+
       totalApplications,
       activeApplications,
       hired: hiredApplications,
       rejected: rejectedApplications,
     },
+
+    summaryChange,
 
     pipeline,
 

@@ -8,14 +8,9 @@ async function applyToJob(req, res) {
   try {
     const { jobId, candidate } = req.body;
 
-    //////////////////////////////////////////////////////
-    // VALIDATION
-    //////////////////////////////////////////////////////
-
     if (!jobId) {
       return res.status(400).json({
         success: false,
-
         message: "jobId is required",
       });
     }
@@ -23,7 +18,6 @@ async function applyToJob(req, res) {
     if (!candidate) {
       return res.status(400).json({
         success: false,
-
         message: "candidate object is required",
       });
     }
@@ -31,9 +25,21 @@ async function applyToJob(req, res) {
     if (!candidate.name || !candidate.email || !candidate.phone) {
       return res.status(400).json({
         success: false,
-
         message: "candidate name, email and phone are required",
       });
+    }
+
+    //////////////////////////////////////////////////////
+    // DETERMINE OWNER
+    //////////////////////////////////////////////////////
+
+    let userId = null;
+    let partnerId = null;
+
+    if (req.user.role === "PARTNER") {
+      partnerId = req.user.userId;
+    } else {
+      userId = req.user.userId;
     }
 
     //////////////////////////////////////////////////////
@@ -42,25 +48,15 @@ async function applyToJob(req, res) {
 
     const application = await applicationService.applyToJob({
       jobId,
-
       candidateData: candidate,
-
-      userId: req.user.userId,
-
+      userId,
+      partnerId,
       role: req.user.role,
-
-      partnerId: req.partner?.id || null,
     });
-
-    //////////////////////////////////////////////////////
-    // RESPONSE
-    //////////////////////////////////////////////////////
 
     return res.status(201).json({
       success: true,
-
       message: "Application submitted successfully",
-
       data: application,
     });
   } catch (error) {
@@ -68,7 +64,6 @@ async function applyToJob(req, res) {
 
     return res.status(500).json({
       success: false,
-
       message: error.message || "Failed to apply",
     });
   }

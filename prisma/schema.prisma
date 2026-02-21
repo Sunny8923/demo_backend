@@ -251,7 +251,8 @@ enum PartnerStatus {
 ////////////////////////////////////////////////////////////
 
 enum Role {
-  USER
-  PARTNER
   ADMIN
+  RECRUITER
+  PARTNER
+  USER
 }

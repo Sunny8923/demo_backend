@@ -1,17 +1,21 @@
 const prisma = require("../../config/prisma");
 
 ////////////////////////////////////////////////////////
-/// Helper: Determine source
+/// Helper: Determine source safely
 ////////////////////////////////////////////////////////
 
 function getSource(application) {
   if (application.appliedByPartnerId) return "PARTNER";
-  if (application.appliedByUserId) return "DIRECT";
+  if (application.appliedByUserId) {
+    if (application.appliedByUser?.role === "RECRUITER") return "RECRUITER";
+    if (application.appliedByUser?.role === "USER") return "USER";
+    return "USER";
+  }
   return "UNKNOWN";
 }
 
 ////////////////////////////////////////////////////////
-/// APPLY TO JOB (FULL ENTERPRISE VERSION)
+/// APPLY TO JOB (Supports USER, RECRUITER, PARTNER)
 ////////////////////////////////////////////////////////
 
 async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
@@ -32,7 +36,7 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
   }
 
   //////////////////////////////////////////////////////
-  // Step 2: Find candidate globally (email + phone)
+  // Step 2: Find candidate globally
   //////////////////////////////////////////////////////
 
   let candidate = await prisma.candidate.findUnique({
@@ -45,14 +49,10 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
   });
 
   //////////////////////////////////////////////////////
-  // Step 3: Create OR update candidate
+  // Step 3: Create candidate if not exists
   //////////////////////////////////////////////////////
 
   if (!candidate) {
-    //////////////////////////////////////////////////
-    // CREATE NEW CANDIDATE
-    //////////////////////////////////////////////////
-
     candidate = await prisma.candidate.create({
       data: {
         name: candidateData.name,
@@ -86,14 +86,17 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
         gender: candidateData.gender,
         maritalStatus: candidateData.maritalStatus,
 
-        createdByUserId: role === "USER" ? userId : null,
+        // FIXED: recruiter and user both stored here
+        createdByUserId:
+          role === "USER" || role === "RECRUITER" ? userId : null,
+
         createdByPartnerId: role === "PARTNER" ? partnerId : null,
       },
     });
   } else {
-    //////////////////////////////////////////////////
-    // UPDATE EXISTING CANDIDATE (only fill missing fields)
-    //////////////////////////////////////////////////
+    //////////////////////////////////////////////////////
+    // Step 4: Update missing fields only
+    //////////////////////////////////////////////////////
 
     candidate = await prisma.candidate.update({
       where: { id: candidate.id },
@@ -154,14 +157,14 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
   }
 
   //////////////////////////////////////////////////////
-  // Step 4: Prevent duplicate application
+  // Step 5: Prevent duplicate application
   //////////////////////////////////////////////////////
 
   const existingApplication = await prisma.application.findUnique({
     where: {
       candidateId_jobId: {
         candidateId: candidate.id,
-        jobId: jobId,
+        jobId,
       },
     },
   });
@@ -171,14 +174,17 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
   }
 
   //////////////////////////////////////////////////////
-  // Step 5: Determine source
+  // Step 6: Determine source correctly
   //////////////////////////////////////////////////////
 
-  const source =
-    role === "PARTNER" ? "PARTNER" : role === "USER" ? "DIRECT" : "UNKNOWN";
+  let source = "UNKNOWN";
+
+  if (role === "PARTNER") source = "PARTNER";
+  else if (role === "RECRUITER") source = "RECRUITER";
+  else if (role === "USER") source = "USER";
 
   //////////////////////////////////////////////////////
-  // Step 6: Create application
+  // Step 7: Create application
   //////////////////////////////////////////////////////
 
   const application = await prisma.application.create({
@@ -186,7 +192,7 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
       jobId,
       candidateId: candidate.id,
 
-      appliedByUserId: role === "USER" ? userId : null,
+      appliedByUserId: role === "USER" || role === "RECRUITER" ? userId : null,
 
       appliedByPartnerId: role === "PARTNER" ? partnerId : null,
 
@@ -219,13 +225,14 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
           id: true,
           name: true,
           email: true,
+          role: true,
         },
       },
     },
   });
 
   //////////////////////////////////////////////////////
-  // Step 7: Increment job applicationsCount
+  // Step 8: Increment applications count
   //////////////////////////////////////////////////////
 
   await prisma.job.update({
@@ -238,7 +245,7 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
   });
 
   //////////////////////////////////////////////////////
-  // Step 8: Return result
+  // Step 9: Return application
   //////////////////////////////////////////////////////
 
   return application;
@@ -249,50 +256,19 @@ async function applyToJob({ jobId, candidateData, userId, role, partnerId }) {
 ////////////////////////////////////////////////////////
 
 async function getMyApplications({ userId, role, partnerId }) {
-  console.log("DEBUG GET MY APPLICATIONS");
-  console.log("userId:", userId);
-  console.log("role:", role);
-  console.log("partnerId:", partnerId);
+  let where = {};
 
-  const where =
-    role === "PARTNER"
-      ? { appliedByPartnerId: partnerId }
-      : { appliedByUserId: userId };
-
-  console.log("WHERE:", where);
+  if (role === "PARTNER") {
+    where = { appliedByPartnerId: partnerId };
+  } else {
+    where = { appliedByUserId: userId };
+  }
 
   const applications = await prisma.application.findMany({
     where,
+
     include: {
       job: true,
-      candidate: true,
-      appliedByPartner: true,
-      appliedByUser: true,
-    },
-  });
-
-  console.log("FOUND APPLICATIONS:", applications.length);
-
-  return applications;
-}
-
-////////////////////////////////////////////////////////
-/// GET ALL APPLICATIONS (ADMIN)
-////////////////////////////////////////////////////////
-
-async function getAllApplications() {
-  const applications = await prisma.application.findMany({
-    include: {
-      job: {
-        select: {
-          id: true,
-          title: true,
-          companyName: true,
-          location: true,
-          status: true,
-        },
-      },
-
       candidate: true,
 
       appliedByPartner: {
@@ -307,6 +283,7 @@ async function getAllApplications() {
           id: true,
           name: true,
           email: true,
+          role: true,
         },
       },
     },
@@ -323,7 +300,45 @@ async function getAllApplications() {
 }
 
 ////////////////////////////////////////////////////////
-/// UPDATE PIPELINE STAGE
+/// GET ALL APPLICATIONS (ADMIN)
+////////////////////////////////////////////////////////
+
+async function getAllApplications() {
+  const applications = await prisma.application.findMany({
+    include: {
+      job: true,
+      candidate: true,
+
+      appliedByPartner: {
+        select: {
+          id: true,
+          organisationName: true,
+        },
+      },
+
+      appliedByUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+        },
+      },
+    },
+
+    orderBy: {
+      createdAt: "desc",
+    },
+  });
+
+  return applications.map((app) => ({
+    ...app,
+    source: getSource(app),
+  }));
+}
+
+////////////////////////////////////////////////////////
+/// UPDATE PIPELINE STAGE (ADMIN + RECRUITER)
 ////////////////////////////////////////////////////////
 
 async function updateApplicationStatus(applicationId, pipelineStage) {
@@ -396,44 +411,19 @@ async function updateApplicationStatus(applicationId, pipelineStage) {
     updateData.offerRejectedAt = now;
   }
 
-  const updatedApplication = await prisma.application.update({
+  return prisma.application.update({
     where: { id: applicationId },
-
     data: updateData,
 
     include: {
-      job: {
-        select: {
-          id: true,
-          title: true,
-          companyName: true,
-        },
-      },
-
+      job: true,
       candidate: true,
-
-      appliedByPartner: {
-        select: {
-          id: true,
-          organisationName: true,
-        },
-      },
-
-      appliedByUser: {
-        select: {
-          id: true,
-          name: true,
-          email: true,
-        },
-      },
+      appliedByPartner: true,
+      appliedByUser: true,
     },
   });
-
-  return updatedApplication;
 }
 
-////////////////////////////////////////////////////////
-/// EXPORTS
 ////////////////////////////////////////////////////////
 
 module.exports = {
