@@ -61,62 +61,89 @@ async function getAdminDashboard(range = "7d") {
     hiredApplications,
     rejectedApplications,
 
-    //////////////////////////////////////////////////////
-    // NEW — RECRUITER SUMMARY
-    //////////////////////////////////////////////////////
-
     totalRecruiters,
-
-    activeRecruiterApplicationsDistinct,
   ] = await Promise.all([
-    prisma.partner.count(),
-
     prisma.partner.count({
-      where: { status: "APPROVED" },
+      where: { createdAt: { gte: startDate } },
     }),
 
     prisma.partner.count({
-      where: { status: "PENDING" },
+      where: {
+        status: "APPROVED",
+        createdAt: { gte: startDate },
+      },
     }),
 
-    prisma.job.count(),
+    prisma.partner.count({
+      where: {
+        status: "PENDING",
+        createdAt: { gte: startDate },
+      },
+    }),
 
     prisma.job.count({
-      where: { status: "OPEN" },
+      where: { createdAt: { gte: startDate } },
     }),
 
     prisma.job.count({
-      where: { status: "CLOSED" },
+      where: {
+        status: "OPEN",
+        createdAt: { gte: startDate },
+      },
     }),
 
-    prisma.application.count(),
+    prisma.job.count({
+      where: {
+        status: "CLOSED",
+        createdAt: { gte: startDate },
+      },
+    }),
 
     prisma.application.count({
-      where: { finalStatus: null },
+      where: {
+        createdAt: { gte: startDate },
+      },
     }),
 
     prisma.application.count({
-      where: { finalStatus: "HIRED" },
+      where: {
+        createdAt: { gte: startDate },
+        pipelineStage: {
+          notIn: ["HIRED", "REJECTED"],
+        },
+      },
     }),
 
     prisma.application.count({
-      where: { finalStatus: "REJECTED" },
+      where: {
+        finalStatus: "HIRED",
+        hiredAt: { gte: startDate },
+      },
     }),
 
-    //////////////////////////////////////////////////////
-    // TOTAL RECRUITERS
-    //////////////////////////////////////////////////////
+    prisma.application.count({
+      where: {
+        finalStatus: "REJECTED",
+        rejectedAt: { gte: startDate },
+      },
+    }),
 
     prisma.user.count({
-      where: { role: "RECRUITER" },
-    }),
-
-    //////////////////////////////////////////////////////
-    // ACTIVE RECRUITERS (distinct recruiters who applied ≥1 candidate)
-    //////////////////////////////////////////////////////
-
-    prisma.application.findMany({
       where: {
+        role: "RECRUITER",
+        createdAt: { gte: startDate },
+      },
+    }),
+  ]);
+
+  //////////////////////////////////////////////////////
+  // ACTIVE RECRUITERS (range based)
+  //////////////////////////////////////////////////////
+
+  const activeRecruiterApplicationsDistinct = await prisma.application.findMany(
+    {
+      where: {
+        createdAt: { gte: startDate }, // IMPORTANT range filter
         appliedByUserId: { not: null },
         appliedByUser: {
           role: "RECRUITER",
@@ -126,8 +153,8 @@ async function getAdminDashboard(range = "7d") {
         appliedByUserId: true,
       },
       distinct: ["appliedByUserId"],
-    }),
-  ]);
+    },
+  );
 
   const activeRecruiters = activeRecruiterApplicationsDistinct.length;
 
@@ -375,18 +402,29 @@ async function getAdminDashboard(range = "7d") {
 
   const [totalApps, screeningCount, interviewScheduledCount, hiredCount] =
     await Promise.all([
-      prisma.application.count(),
-
       prisma.application.count({
-        where: { pipelineStage: "SCREENING" },
+        where: { createdAt: { gte: startDate } },
       }),
 
       prisma.application.count({
-        where: { pipelineStage: "INTERVIEW_SCHEDULED" },
+        where: {
+          pipelineStage: "SCREENING",
+          createdAt: { gte: startDate },
+        },
       }),
 
       prisma.application.count({
-        where: { pipelineStage: "HIRED" },
+        where: {
+          pipelineStage: "INTERVIEW_SCHEDULED",
+          createdAt: { gte: startDate },
+        },
+      }),
+
+      prisma.application.count({
+        where: {
+          pipelineStage: "HIRED",
+          createdAt: { gte: startDate },
+        },
       }),
     ]);
 
