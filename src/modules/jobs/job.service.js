@@ -121,70 +121,122 @@ async function createJobsFromCSV(filePath, createdById) {
     let totalRows = 0;
     let skipped = 0;
 
+    //////////////////////////////////////////////////////////
+    // HEADER NORMALIZER
+    //////////////////////////////////////////////////////////
+
+    function normalizeHeader(header) {
+      return header
+        ?.toString()
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+    }
+
+    //////////////////////////////////////////////////////////
+    // FLEXIBLE FIELD MAPPER
+    //////////////////////////////////////////////////////////
+
+    function getField(row, possibleNames) {
+      for (const key in row) {
+        const normalizedKey = normalizeHeader(key);
+
+        for (const name of possibleNames) {
+          if (normalizedKey === normalizeHeader(name)) {
+            return row[key];
+          }
+        }
+      }
+      return null;
+    }
+
+    //////////////////////////////////////////////////////////
+
     fs.createReadStream(filePath)
-
-      .pipe(
-        csv({
-          mapHeaders: ({ header }) => header.trim(),
-        }),
-      )
-
+      .pipe(csv())
       .on("data", (row) => {
         totalRows++;
 
         try {
-          const get = (...keys) => {
-            for (const key of keys) {
-              if (row[key] && row[key].toString().trim()) {
-                return row[key];
-              }
-            }
-
-            return null;
-          };
-
           const job = {
-            jrCode: get("JR Code", "Job Code", "Code"),
+            jrCode: safeString(
+              getField(row, [
+                "jrCode",
+                "jobCode",
+                "jr code",
+                "job code",
+                "code",
+              ]),
+            ),
 
-            title: get("Designation", "Title", "Job Title", "Position"),
+            title: safeString(
+              getField(row, [
+                "title",
+                "job title",
+                "designation",
+                "position",
+                "job title/requirement name",
+              ]),
+            ),
 
-            companyName: get("Client Name", "Company", "Company Name"),
+            companyName: safeString(
+              getField(row, [
+                "company",
+                "company name",
+                "client",
+                "client name",
+              ]),
+            ),
 
-            location: get("Location", "City", "District"),
+            location: safeString(
+              getField(row, ["location", "district", "city", "state"]),
+            ),
 
-            department: get("Department", "Vertical"),
+            department: safeString(
+              getField(row, ["department", "zone", "vertical"]),
+            ),
 
-            description: get("Description"),
+            salaryMin: safeInt(
+              getField(row, [
+                "salary min",
+                "ctc min",
+                "ctc -min",
+                "min salary",
+              ]),
+            ),
 
-            skills: get("Skills"),
+            salaryMax: safeInt(
+              getField(row, ["salary max", "ctc max", "ctc-max", "max salary"]),
+            ),
 
-            education: get("Education"),
+            openings:
+              safeInt(
+                getField(row, ["openings", "no of openings", "vacancy"]),
+              ) || 1,
 
-            minExperience: safeInt(get("Min Experience")),
+            status: normalizeStatus(getField(row, ["status"])),
 
-            maxExperience: safeInt(get("Max Experience")),
+            requestDate: safeDate(
+              getField(row, ["request date", "start date"]),
+            ),
 
-            salaryMin: safeInt(get("Salary Min")),
-
-            salaryMax: safeInt(get("Salary Max")),
-
-            openings: safeInt(get("Openings", "No Of Openings")) || 1,
-
-            status: normalizeStatus(get("Status")),
-
-            requestDate: safeDate(get("Request Date")),
-
-            closureDate: safeDate(get("Closure Date")),
+            closureDate: safeDate(
+              getField(row, ["closure date", "closed date"]),
+            ),
 
             createdById,
           };
 
-          if (!job.title || !job.companyName || !job.location) {
+          //////////////////////////////////////////////////////////
+          // MINIMUM VALIDATION (only title required)
+          //////////////////////////////////////////////////////////
+
+          if (!job.title) {
             skipped++;
 
             errors.push({
               row: totalRows,
-              error: "Missing required fields",
+              error: "Missing job title",
             });
 
             return;
@@ -206,38 +258,29 @@ async function createJobsFromCSV(filePath, createdById) {
           if (jobs.length === 0) {
             return resolve({
               success: false,
-
               summary: {
                 totalRows,
                 created: 0,
                 skipped,
               },
-
               errors,
             });
           }
 
           const result = await prisma.job.createMany({
             data: jobs,
-
             skipDuplicates: true,
           });
 
           resolve({
             success: true,
-
             summary: {
               totalRows,
-
               validRows: jobs.length,
-
               created: result.count,
-
               skipped,
-
               failed: errors.length,
             },
-
             errors,
           });
         } catch (err) {
