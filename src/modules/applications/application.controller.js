@@ -1,4 +1,5 @@
 const applicationService = require("./application.service");
+const prisma = require("../../config/prisma");
 
 ////////////////////////////////////////////////////////
 // APPLY TO JOB
@@ -37,7 +38,20 @@ async function applyToJob(req, res) {
     let partnerId = null;
 
     if (req.user.role === "PARTNER") {
-      partnerId = req.user.userId;
+      const partner = await prisma.partner.findUnique({
+        where: {
+          userId: req.user.userId,
+        },
+      });
+
+      if (!partner) {
+        return res.status(400).json({
+          success: false,
+          message: "Partner profile not found for this user",
+        });
+      }
+
+      partnerId = partner.id;
     } else {
       userId = req.user.userId;
     }
@@ -75,19 +89,34 @@ async function applyToJob(req, res) {
 
 async function getMyApplications(req, res) {
   try {
+    let partnerId = null;
+
+    if (req.user.role === "PARTNER") {
+      const partner = await prisma.partner.findUnique({
+        where: {
+          userId: req.user.userId,
+        },
+      });
+
+      if (!partner) {
+        return res.status(400).json({
+          success: false,
+          message: "Partner profile not found",
+        });
+      }
+
+      partnerId = partner.id;
+    }
+
     const applications = await applicationService.getMyApplications({
       userId: req.user.userId,
-
       role: req.user.role,
-
-      partnerId: req.partner?.id || null,
+      partnerId,
     });
 
     return res.json({
       success: true,
-
       count: applications.length,
-
       data: applications,
     });
   } catch (error) {
@@ -95,7 +124,6 @@ async function getMyApplications(req, res) {
 
     return res.status(500).json({
       success: false,
-
       message: error.message || "Failed to fetch applications",
     });
   }
