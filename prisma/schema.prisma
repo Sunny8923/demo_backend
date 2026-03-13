@@ -89,6 +89,13 @@ enum JobStatus {
 /// CANDIDATE
 ////////////////////////////////////////////////////////////
 
+enum CandidateSource {
+  DIRECT_APPLY
+  PARTNER_UPLOAD
+  ADMIN_RESUME_UPLOAD
+  ADMIN_CSV_UPLOAD
+}
+
 model Candidate {
   id String @id @default(uuid())
 
@@ -125,18 +132,26 @@ model Candidate {
   gender        String?
   maritalStatus String?
 
-  // Source tracking
+  ////////////////////////////////////////////////////////////
+  /// RESUME DATA
+  ////////////////////////////////////////////////////////////
+
+  resumeUrl  String?
+  resumeText String?
+
+  source CandidateSource @default(DIRECT_APPLY)
+
+  ////////////////////////////////////////////////////////////
+
   createdByUserId    String?
   createdByPartnerId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relations
   applications Application[]
 
   @@unique([email, phone])
-  // Indexes and constraints
   @@index([email])
   @@index([phone])
 }
