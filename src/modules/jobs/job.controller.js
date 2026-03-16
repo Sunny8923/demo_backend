@@ -29,7 +29,7 @@ async function createJob(req, res) {
     // VALIDATION
     //////////////////////////////////////////////////////
 
-    if (!title || !companyName || !location) {
+    if (!title) {
       return res.status(400).json({
         success: false,
         message: "title, companyName and location are required",

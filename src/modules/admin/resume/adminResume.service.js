@@ -1,13 +1,33 @@
 const fs = require("fs");
 const path = require("path");
-const pdfjs = require("pdfjs-dist/legacy/build/pdf.mjs");
 const mammoth = require("mammoth");
 const unzipper = require("unzipper");
+
+const pLimit = require("p-limit").default;
+
 const openai = require("../../../config/openai");
 const prisma = require("../../../config/prisma");
 
+const limit = pLimit(5);
+
 ////////////////////////////////////////////////////////////
-/// EXTRACT TEXT FROM PDF
+/// CLEAN RESUME TEXT
+////////////////////////////////////////////////////////////
+
+function cleanResumeText(text) {
+  if (!text) return "";
+
+  return text
+    .replace(/\r/g, "")
+    .replace(/\n{2,}/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/Page \d+ of \d+/gi, "")
+    .replace(/[•●▪]/g, "-")
+    .trim();
+}
+
+////////////////////////////////////////////////////////////
+/// PDF PARSER
 ////////////////////////////////////////////////////////////
 
 async function parsePDF(filePath) {
@@ -15,18 +35,15 @@ async function parsePDF(filePath) {
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
     const data = new Uint8Array(fs.readFileSync(filePath));
-
     const pdf = await pdfjs.getDocument({ data }).promise;
 
     let text = "";
 
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
-
       const content = await page.getTextContent();
 
       const strings = content.items.map((item) => item.str);
-
       text += strings.join(" ") + "\n";
     }
 
@@ -38,46 +55,48 @@ async function parsePDF(filePath) {
 }
 
 ////////////////////////////////////////////////////////////
-/// EXTRACT TEXT FROM DOCX
+/// DOCX PARSER
 ////////////////////////////////////////////////////////////
 
 async function parseDOCX(filePath) {
-  const result = await mammoth.extractRawText({ path: filePath });
-  return result.value || "";
+  try {
+    const result = await mammoth.extractRawText({ path: filePath });
+    return result.value || "";
+  } catch (error) {
+    console.error("DOCX parsing failed:", error);
+    return "";
+  }
 }
 
 ////////////////////////////////////////////////////////////
-/// EXTRACT TEXT FROM TXT
+/// TXT PARSER
 ////////////////////////////////////////////////////////////
 
 function parseTXT(filePath) {
-  return fs.readFileSync(filePath, "utf8");
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    console.error("TXT parsing failed:", error);
+    return "";
+  }
 }
 
 ////////////////////////////////////////////////////////////
-/// PARSE SINGLE RESUME
+/// PARSE RESUME
 ////////////////////////////////////////////////////////////
 
 async function parseResume(file) {
   const ext = path.extname(file.originalname).toLowerCase();
 
-  if (ext === ".pdf") {
-    return await parsePDF(file.path);
-  }
-
-  if (ext === ".docx" || ext === ".doc") {
-    return await parseDOCX(file.path);
-  }
-
-  if (ext === ".txt") {
-    return parseTXT(file.path);
-  }
+  if (ext === ".pdf") return await parsePDF(file.path);
+  if (ext === ".docx" || ext === ".doc") return await parseDOCX(file.path);
+  if (ext === ".txt") return parseTXT(file.path);
 
   return "";
 }
 
 ////////////////////////////////////////////////////////////
-/// EXTRACT ZIP FILE
+/// ZIP EXTRACTION
 ////////////////////////////////////////////////////////////
 
 async function extractZip(filePath) {
@@ -86,48 +105,41 @@ async function extractZip(filePath) {
   const directory = await unzipper.Open.file(filePath);
 
   for (const entry of directory.files) {
-    const fileName = entry.path;
-    const ext = path.extname(fileName).toLowerCase();
+    const ext = path.extname(entry.path).toLowerCase();
 
-    ```
-if (![".pdf", ".docx", ".doc", ".txt"].includes(ext)) {
-  continue;
-}
+    if (![".pdf", ".docx", ".doc", ".txt"].includes(ext)) continue;
 
-const safeName = fileName.replace(/[\/\\]/g, "_");
+    const safeName = entry.path.replace(/[\/\\]/g, "_");
 
-const outputPath =
-  "uploads/resumes/" + Date.now() + "-" + safeName;
+    const outputPath = "uploads/resumes/" + Date.now() + "-" + safeName;
 
-await new Promise((resolve, reject) => {
-  entry
-    .stream()
-    .pipe(fs.createWriteStream(outputPath))
-    .on("finish", resolve)
-    .on("error", reject);
-});
+    await new Promise((resolve, reject) => {
+      entry
+        .stream()
+        .pipe(fs.createWriteStream(outputPath))
+        .on("finish", resolve)
+        .on("error", reject);
+    });
 
-extractedFiles.push({
-  originalname: fileName,
-  path: outputPath,
-});
-```;
+    extractedFiles.push({
+      originalname: entry.path,
+      path: outputPath,
+    });
   }
 
   return extractedFiles;
 }
 
 ////////////////////////////////////////////////////////////
-/// AI PARSE RESUME
+/// AI RESUME PARSER
 ////////////////////////////////////////////////////////////
 
 async function extractCandidateData(resumeText) {
-  if (!resumeText || resumeText.length < 50) {
-    return null;
-  }
+  try {
+    if (!resumeText || resumeText.length < 50) return null;
 
-  const prompt = `
-Extract candidate information from the resume text below.
+    const prompt = `
+Extract candidate information from the resume text.
 
 Return ONLY valid JSON.
 
@@ -137,7 +149,7 @@ Return ONLY valid JSON.
 "phone": "",
 "currentLocation": "",
 "totalExperience": number,
-"skills": "",
+"skills": [],
 "currentCompany": "",
 "currentDesignation": "",
 "highestQualification": ""
@@ -147,29 +159,27 @@ Resume Text:
 ${resumeText.substring(0, 12000)}
 `;
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0,
-    messages: [
-      {
-        role: "system",
-        content: "You are an expert resume parser. Return clean JSON only.",
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-  });
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: "You extract structured data from resumes.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    });
 
-  let response = completion.choices[0].message.content;
+    const content = completion.choices[0].message.content;
 
-  response = response.replace(/`json/g, "").replace(/`/g, "").trim();
-
-  try {
-    return JSON.parse(response);
-  } catch (err) {
-    console.log("AI JSON parse failed:", response);
+    return JSON.parse(content);
+  } catch (error) {
+    console.error("AI resume parsing failed:", error);
     return null;
   }
 }
@@ -179,52 +189,79 @@ ${resumeText.substring(0, 12000)}
 ////////////////////////////////////////////////////////////
 
 async function saveCandidate(candidateData, resumeText, filePath) {
-  if (!candidateData) return null;
+  try {
+    if (!candidateData) return null;
 
-  const email = candidateData.email || "";
-  const phone = candidateData.phone || "";
+    const email = candidateData.email || "";
+    const phone = candidateData.phone || "";
 
-  if (!email && !phone) return null;
+    if (!email && !phone) return null;
 
-  const existing = await prisma.candidate.findFirst({
-    where: {
-      OR: [{ email: email }, { phone: phone }],
-    },
-  });
+    const existing = await prisma.candidate.findFirst({
+      where: {
+        OR: [{ email }, { phone }],
+      },
+    });
 
-  if (existing) {
-    return existing;
+    if (existing) return existing;
+
+    const candidate = await prisma.candidate.create({
+      data: {
+        name: candidateData.name || "Unknown",
+        email,
+        phone,
+        currentLocation: candidateData.currentLocation || null,
+        totalExperience: candidateData.totalExperience
+          ? Number(candidateData.totalExperience)
+          : null,
+        skills: candidateData.skills ? candidateData.skills.join(", ") : null,
+        currentCompany: candidateData.currentCompany || null,
+        currentDesignation: candidateData.currentDesignation || null,
+        highestQualification: candidateData.highestQualification || null,
+        resumeUrl: filePath,
+        resumeText,
+        source: "ADMIN_RESUME_UPLOAD",
+      },
+    });
+
+    return candidate;
+  } catch (error) {
+    console.error("Candidate save failed:", error);
+    return null;
   }
-
-  const candidate = await prisma.candidate.create({
-    data: {
-      name: candidateData.name || "Unknown",
-      email,
-      phone,
-
-      currentLocation: candidateData.currentLocation || null,
-
-      totalExperience: candidateData.totalExperience
-        ? Number(candidateData.totalExperience)
-        : null,
-
-      skills: candidateData.skills || null,
-      currentCompany: candidateData.currentCompany || null,
-      currentDesignation: candidateData.currentDesignation || null,
-      highestQualification: candidateData.highestQualification || null,
-
-      resumeUrl: filePath,
-      resumeText: resumeText,
-
-      source: "ADMIN_RESUME_UPLOAD",
-    },
-  });
-
-  return candidate;
 }
 
 ////////////////////////////////////////////////////////////
-/// MAIN SERVICE FUNCTION
+/// PROCESS SINGLE RESUME
+////////////////////////////////////////////////////////////
+
+async function processSingleResume(file) {
+  try {
+    const rawText = await parseResume(file);
+
+    const text = cleanResumeText(rawText);
+
+    const candidateData = await extractCandidateData(text);
+
+    const savedCandidate = await saveCandidate(candidateData, text, file.path);
+
+    return {
+      fileName: file.originalname,
+      candidate: candidateData,
+      candidateId: savedCandidate ? savedCandidate.id : null,
+    };
+  } catch (error) {
+    console.error("Resume processing failed:", error);
+
+    return {
+      fileName: file.originalname,
+      error: "Failed to process",
+    };
+  }
+}
+
+////////////////////////////////////////////////////////////
+/// MAIN PROCESSOR
 ////////////////////////////////////////////////////////////
 
 async function processResumes(files) {
@@ -233,49 +270,19 @@ async function processResumes(files) {
   for (const file of files) {
     const ext = path.extname(file.originalname).toLowerCase();
 
-    ////////////////////////////////////////////////////////
-    /// ZIP FILE HANDLING
-    ////////////////////////////////////////////////////////
-
     if (ext === ".zip") {
       const extractedFiles = await extractZip(file.path);
 
-      for (const extractedFile of extractedFiles) {
-        const text = await parseResume(extractedFile);
+      const results = await Promise.all(
+        extractedFiles.map((f) => limit(() => processSingleResume(f))),
+      );
 
-        const candidateData = await extractCandidateData(text);
+      parsedResults.push(...results);
+    } else {
+      const result = await limit(() => processSingleResume(file));
 
-        const savedCandidate = await saveCandidate(
-          candidateData,
-          text,
-          extractedFile.path,
-        );
-
-        parsedResults.push({
-          fileName: extractedFile.originalname,
-          candidate: candidateData,
-          candidateId: savedCandidate ? savedCandidate.id : null,
-        });
-      }
-
-      continue;
+      parsedResults.push(result);
     }
-
-    ////////////////////////////////////////////////////////
-    /// NORMAL FILE
-    ////////////////////////////////////////////////////////
-
-    const text = await parseResume(file);
-
-    const candidateData = await extractCandidateData(text);
-
-    const savedCandidate = await saveCandidate(candidateData, text, file.path);
-
-    parsedResults.push({
-      fileName: file.originalname,
-      candidate: candidateData,
-      candidateId: savedCandidate ? savedCandidate.id : null,
-    });
   }
 
   return parsedResults;

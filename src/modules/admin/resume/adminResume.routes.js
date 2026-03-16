@@ -7,10 +7,6 @@ const authMiddleware = require("../../../middlewares/auth.middleware");
 const requireRole = require("../../../middlewares/requireRole.middleware");
 const uploadResume = require("../../../middlewares/uploadResume.middleware");
 
-////////////////////////////////////////////////////////////
-/// ADMIN RESUME ROUTES
-////////////////////////////////////////////////////////////
-
 router.post(
   "/upload",
   authMiddleware,

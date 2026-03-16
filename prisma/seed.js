@@ -30,10 +30,9 @@ const CANDIDATES_COUNT = 180;
 const APPLICATIONS_TARGET = 260;
 
 ////////////////////////////////////////////////////////////
-// TIME HELPERS (CRITICAL FIX)
+// TIME HELPERS
 ////////////////////////////////////////////////////////////
 
-// 60–30 days ago
 function randomDateOld() {
   return faker.date.between({
     from: new Date(Date.now() - 60 * 86400000),
@@ -41,7 +40,6 @@ function randomDateOld() {
   });
 }
 
-// 30–7 days ago
 function randomDateMid() {
   return faker.date.between({
     from: new Date(Date.now() - 30 * 86400000),
@@ -49,7 +47,6 @@ function randomDateMid() {
   });
 }
 
-// last 7 days
 function randomDateRecent() {
   return faker.date.between({
     from: new Date(Date.now() - 7 * 86400000),
@@ -57,10 +54,8 @@ function randomDateRecent() {
   });
 }
 
-// realistic weighted distribution
 function randomDateRealistic() {
   const r = Math.random();
-
   if (r < 0.3) return randomDateOld();
   if (r < 0.7) return randomDateMid();
   return randomDateRecent();
@@ -102,20 +97,7 @@ function getFinalStatus(stage) {
 ////////////////////////////////////////////////////////////
 
 async function main() {
-  console.log("🌱 Clearing database...");
-
-  await prisma.application.deleteMany();
-  await prisma.candidate.deleteMany();
-  await prisma.job.deleteMany();
-  await prisma.partner.deleteMany();
-
-  await prisma.user.deleteMany({
-    where: {
-      role: {
-        in: ["USER", "RECRUITER", "PARTNER"],
-      },
-    },
-  });
+  console.log("🌱 Adding seed data WITHOUT deleting existing data...");
 
   const password = await bcrypt.hash("password123", 10);
 
@@ -132,7 +114,7 @@ async function main() {
       await prisma.user.create({
         data: {
           name: faker.person.fullName(),
-          email: faker.internet.email(),
+          email: faker.internet.email().toLowerCase(),
           password,
           role: "USER",
           createdAt: randomDateRealistic(),
@@ -154,7 +136,7 @@ async function main() {
       await prisma.user.create({
         data: {
           name: faker.person.fullName(),
-          email: faker.internet.email(),
+          email: faker.internet.email().toLowerCase(),
           password,
           role: "RECRUITER",
           createdAt: randomDateRealistic(),
@@ -175,7 +157,7 @@ async function main() {
     const user = await prisma.user.create({
       data: {
         name: faker.person.fullName(),
-        email: faker.internet.email(),
+        email: faker.internet.email().toLowerCase(),
         password,
         role: "PARTNER",
         createdAt: randomDateRealistic(),
@@ -214,26 +196,33 @@ async function main() {
 
   const jobs = [];
 
+  const DEPARTMENTS = [
+    "Engineering",
+    "Sales",
+    "Marketing",
+    "HR",
+    "Finance",
+    "Operations",
+    "Support",
+  ];
+
   for (let i = 0; i < JOBS_COUNT; i++) {
     const createdAt = randomDateRealistic();
 
     jobs.push(
       await prisma.job.create({
         data: {
-          jrCode: `JR-${1000 + i}`,
+          jrCode: `JR-${faker.number.int({ min: 10000, max: 99999 })}`,
 
           title: faker.person.jobTitle(),
-
           description: faker.lorem.paragraph(),
-
           companyName: faker.company.name(),
-
           location: faker.location.city(),
+          department: random(DEPARTMENTS),
 
           status: random(["OPEN", "OPEN", "OPEN", "CLOSED"]),
 
           requestDate: createdAt,
-
           createdById: random(recruiters).id,
 
           createdAt,
@@ -255,7 +244,7 @@ async function main() {
       await prisma.candidate.create({
         data: {
           name: faker.person.fullName(),
-          email: faker.internet.email(),
+          email: faker.internet.email().toLowerCase(),
           phone: faker.phone.number(),
 
           totalExperience: faker.number.float({
@@ -306,46 +295,33 @@ async function main() {
   }) {
     const stage = random(PIPELINE);
 
-    await prisma.application
-      .create({
-        data: {
-          jobId: job.id,
-          candidateId: candidate.id,
+    await prisma.application.create({
+      data: {
+        jobId: job.id,
+        candidateId: candidate.id,
 
-          appliedByUserId: userId || null,
-          appliedByPartnerId: partnerId || null,
+        appliedByUserId: userId || null,
+        appliedByPartnerId: partnerId || null,
 
-          pipelineStage: stage,
-          finalStatus: getFinalStatus(stage),
+        pipelineStage: stage,
 
-          source: random(["LinkedIn", "Naukri", "Referral"]),
+        finalStatus: getFinalStatus(stage),
 
-          createdAt,
-        },
-      })
-      .catch(() => {});
+        source: random(["LinkedIn", "Naukri", "Referral"]),
+
+        createdAt,
+      },
+    });
 
     jobCounts[job.id] = (jobCounts[job.id] || 0) + 1;
   }
 
-  // 1 application per user (recent)
-  for (const user of users) {
-    await createApplication({
-      job: random(jobs),
-      candidate: random(candidates),
-      userId: user.id,
-      createdAt: randomDateRecent(),
-    });
-  }
-
-  // remaining applications
-  for (let i = 0; i < APPLICATIONS_TARGET - USERS_COUNT; i++) {
+  for (let i = 0; i < APPLICATIONS_TARGET; i++) {
     await createApplication({
       job: random(jobs),
       candidate: random(candidates),
 
       userId: Math.random() < 0.4 ? random(recruiters).id : null,
-
       partnerId: Math.random() < 0.3 ? random(partners).id : null,
 
       createdAt: randomDateRealistic(),
@@ -353,19 +329,8 @@ async function main() {
   }
 
   ////////////////////////////////////////////////////////////
-  // UPDATE COUNTS
-  ////////////////////////////////////////////////////////////
 
-  for (const jobId in jobCounts) {
-    await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        applicationsCount: jobCounts[jobId],
-      },
-    });
-  }
-
-  console.log("✅ SEED COMPLETED SUCCESSFULLY");
+  console.log("✅ SEED COMPLETED WITHOUT DELETING EXISTING DATA");
 }
 
 ////////////////////////////////////////////////////////////
