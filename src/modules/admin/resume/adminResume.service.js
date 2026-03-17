@@ -144,6 +144,20 @@ async function extractZip(filePath) {
   return extractedFiles;
 }
 
+async function countZipFiles(filePath) {
+  try {
+    const directory = await unzipper.Open.file(filePath);
+
+    return directory.files.filter((entry) => {
+      const ext = path.extname(entry.path).toLowerCase();
+      return [".pdf", ".doc", ".docx", ".txt"].includes(ext);
+    }).length;
+  } catch (err) {
+    console.error("ZIP count failed:", err);
+    return 0;
+  }
+}
+
 ////////////////////////////////////////////////////////////
 /// AI PARSER
 ////////////////////////////////////////////////////////////
@@ -152,9 +166,14 @@ async function callOpenAI(prompt) {
   const completion = await openai.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0,
+    max_tokens: 800,
     response_format: { type: "json_object" },
     messages: [
-      { role: "system", content: "You are an expert resume parser." },
+      {
+        role: "system",
+        content:
+          "You are an expert resume parser. Always return clean structured JSON.",
+      },
       { role: "user", content: prompt },
     ],
   });
@@ -170,7 +189,64 @@ async function extractCandidateData(resumeText) {
   try {
     if (!resumeText || resumeText.length < 300) return null;
 
-    const prompt = `Extract structured data from resume.`;
+    ////////////////////////////////////////////////////////////
+    /// BASIC EXTRACTION (BOOST ACCURACY)
+    ////////////////////////////////////////////////////////////
+
+    const basic = extractBasicInfo(resumeText);
+
+    ////////////////////////////////////////////////////////////
+    /// STRONG PROMPT
+    ////////////////////////////////////////////////////////////
+
+    const prompt = `
+Extract structured candidate data from the resume text.
+
+Return STRICT JSON with the following fields:
+
+{
+  "name": string | null,
+  "email": string | null,
+  "phone": string | null,
+  "currentLocation": string | null,
+  "preferredLocations": string | null,
+  "hometown": string | null,
+  "pincode": string | null,
+
+  "totalExperience": number | null,
+  "currentCompany": string | null,
+  "currentDesignation": string | null,
+  "department": string | null,
+  "industry": string | null,
+
+  "skills": string,
+
+  "currentSalary": number | null,
+  "expectedSalary": number | null,
+  "noticePeriodDays": number | null,
+
+  "highestQualification": string | null
+}
+
+Rules:
+- DO NOT guess → return null if not present
+- Experience must be number in years (e.g. 2.5)
+- Salary must be yearly INR number (e.g. 600000)
+- Skills must be comma separated, lowercase, no duplicates
+- Phone must contain only digits
+- If fresher → totalExperience = 0
+
+Known extracted info:
+email: ${basic.email || "null"}
+phone: ${basic.phone || "null"}
+
+Resume:
+${resumeText.slice(0, 12000)}
+`;
+
+    ////////////////////////////////////////////////////////////
+    /// RETRY LOGIC
+    ////////////////////////////////////////////////////////////
 
     for (let i = 0; i < 2; i++) {
       const result = await callOpenAI(prompt);
@@ -204,19 +280,6 @@ async function processSingleResume(file, index) {
 
     const hash = generateHash(text);
 
-    const existingByHash = await prisma.candidate.findFirst({
-      where: { resumeHash: hash },
-    });
-
-    if (existingByHash) {
-      return {
-        row: index + 1,
-        fileName: file.originalname,
-        status: "duplicate",
-        candidateId: existingByHash.id,
-      };
-    }
-
     const basic = extractBasicInfo(text);
 
     if (!basic.email && !basic.phone) {
@@ -243,7 +306,7 @@ async function processSingleResume(file, index) {
       "ADMIN_RESUME_UPLOAD",
       {
         resumeUrl: file.path,
-        resumeText: text,
+        resumeText: text.slice(0, 2000),
         resumeHash: hash,
       },
     );
@@ -277,48 +340,74 @@ async function processSingleResume(file, index) {
 /// MAIN PROCESSOR
 ////////////////////////////////////////////////////////////
 
-async function processResumes(files) {
+async function processResumes(files, jobId) {
   const processed = [];
-
   let index = 0;
 
   for (const file of files) {
     const ext = path.extname(file.originalname).toLowerCase();
 
+    let results = [];
+
     if (ext === ".zip") {
       const extracted = await extractZip(file.path);
 
-      const results = await Promise.all(
+      results = await Promise.all(
         extracted.map((f, i) => limit(() => processSingleResume(f, index + i))),
       );
 
-      processed.push(...results);
       index += extracted.length;
-
       fs.unlinkSync(file.path);
     } else {
       const result = await limit(() => processSingleResume(file, index));
-
-      processed.push(result);
+      results = [result];
       index++;
     }
+
+    processed.push(...results);
+
+    let created = 0;
+    let duplicate = 0;
+    let skipped = 0;
+    let error = 0;
+
+    for (const r of results) {
+      if (r.status === "created") created++;
+      else if (r.status === "duplicate") duplicate++;
+      else if (r.status === "skipped") skipped++;
+      else if (r.status === "error") error++;
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// 🔥 UPDATE JOB PROGRESS
+    ////////////////////////////////////////////////////////////
+
+    await prisma.uploadJob.update({
+      where: { id: jobId },
+      data: {
+        processed: { increment: results.length },
+        created: { increment: created },
+        duplicate: { increment: duplicate },
+        skipped: { increment: skipped },
+        error: { increment: error },
+      },
+    });
   }
 
   ////////////////////////////////////////////////////////////
-  /// SUMMARY
+  /// FINAL STATUS
   ////////////////////////////////////////////////////////////
-
-  const summary = {
-    total: processed.length,
-    created: processed.filter((r) => r.status === "created").length,
-    duplicate: processed.filter((r) => r.status === "duplicate").length,
-    skipped: processed.filter((r) => r.status === "skipped").length,
-    error: processed.filter((r) => r.status === "error").length,
-  };
-
-  return { summary, results: processed };
+  await prisma.uploadJob.update({
+    where: { id: jobId },
+    data: {
+      status: "completed",
+      results: processed, // 👈 store all results
+    },
+  });
+  return processed;
 }
 
 module.exports = {
   processResumes,
+  countZipFiles,
 };

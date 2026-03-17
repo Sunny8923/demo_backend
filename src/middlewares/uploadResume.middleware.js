@@ -37,17 +37,12 @@ const storage = multer.diskStorage({
 ////////////////////////////////////////////////////////////
 
 function fileFilter(req, file, cb) {
-  const allowedMimeTypes = [
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "text/plain",
-    "application/zip",
-    "application/x-zip-compressed",
-  ];
+  const allowedExtensions = [".pdf", ".doc", ".docx", ".txt", ".zip"];
 
-  if (!allowedMimeTypes.includes(file.mimetype)) {
-    return cb(new Error("Unsupported resume format"));
+  const ext = path.extname(file.originalname).toLowerCase();
+
+  if (!allowedExtensions.includes(ext)) {
+    return cb(new Error("Unsupported resume format"), false);
   }
 
   cb(null, true);

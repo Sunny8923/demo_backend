@@ -61,8 +61,70 @@ function normalizeSkills(skills) {
 /// MAIN FUNCTION
 ////////////////////////////////////////////////////////////
 
+function mergeValues(oldVal, newVal) {
+  if (!oldVal && newVal) return newVal;
+  return oldVal;
+}
+
+function mergeSkills(oldSkills, newSkills) {
+  const oldArr = oldSkills ? oldSkills.split(",") : [];
+  const newArr = newSkills ? newSkills.split(",") : [];
+
+  const merged = [...new Set([...oldArr, ...newArr])];
+
+  return merged.filter(Boolean).join(", ");
+}
+
+function buildUpdateData(existing, data, extra) {
+  return {
+    name: mergeValues(existing.name, data.name),
+
+    currentLocation: mergeValues(
+      existing.currentLocation,
+      data.currentLocation,
+    ),
+    preferredLocations: mergeValues(
+      existing.preferredLocations,
+      data.preferredLocations,
+    ),
+    hometown: mergeValues(existing.hometown, data.hometown),
+    pincode: mergeValues(existing.pincode, data.pincode),
+
+    totalExperience:
+      existing.totalExperience ?? parseExperience(data.totalExperience),
+
+    currentCompany: mergeValues(existing.currentCompany, data.currentCompany),
+    currentDesignation: mergeValues(
+      existing.currentDesignation,
+      data.currentDesignation,
+    ),
+    department: mergeValues(existing.department, data.department),
+    industry: mergeValues(existing.industry, data.industry),
+
+    skills: mergeSkills(existing.skills, normalizeSkills(data.skills)),
+
+    currentSalary: existing.currentSalary ?? parseSalary(data.currentSalary),
+
+    expectedSalary: existing.expectedSalary ?? parseSalary(data.expectedSalary),
+
+    noticePeriodDays:
+      existing.noticePeriodDays ?? parseNoticePeriod(data.noticePeriodDays),
+
+    highestQualification: mergeValues(
+      existing.highestQualification,
+      data.highestQualification,
+    ),
+
+    resumeUrl: extra.resumeUrl || existing.resumeUrl,
+    resumeText: extra.resumeText || existing.resumeText,
+    resumeHash: existing.resumeHash || extra.resumeHash,
+  };
+}
+
 async function createOrFindCandidate(data, source, extra = {}) {
-  const email = isValidEmail(data.email) ? data.email : null;
+  const email = isValidEmail(data.email)
+    ? data.email.toLowerCase().trim()
+    : null;
   const phone = normalizePhone(data.phone);
 
   if (!email && !phone) return null;
@@ -73,13 +135,22 @@ async function createOrFindCandidate(data, source, extra = {}) {
 
   const existing = await prisma.candidate.findFirst({
     where: {
-      OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
+      OR: [
+        ...(extra.resumeHash ? [{ resumeHash: extra.resumeHash }] : []),
+        ...(email ? [{ email }] : []),
+        ...(phone ? [{ phone }] : []),
+      ],
     },
   });
 
   if (existing) {
+    const updated = await prisma.candidate.update({
+      where: { id: existing.id },
+      data: buildUpdateData(existing, data, extra),
+    });
+
     return {
-      candidate: existing,
+      candidate: updated,
       isNew: false,
     };
   }
