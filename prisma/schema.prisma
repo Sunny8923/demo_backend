@@ -29,6 +29,12 @@ model User {
 /// JOB
 ////////////////////////////////////////////////////////////
 
+enum JobSource {
+  MANUAL
+  CSV_UPLOAD
+  JD_UPLOAD
+}
+
 model Job {
   id String @id @default(uuid())
 
@@ -36,6 +42,7 @@ model Job {
   jrCode      String? @unique
   title       String
   description String?
+  jd          String?
   department  String?
   companyName String?
   location    String?
@@ -57,6 +64,8 @@ model Job {
   clientName    String?
   clientContact String?
   clientEmail   String?
+
+  source JobSource @default(MANUAL)
 
   // Job lifecycle
   status      JobStatus @default(OPEN)
@@ -101,59 +110,68 @@ enum CandidateSource {
 model Candidate {
   id String @id @default(uuid())
 
-  // Basic identity
-  name  String
-  email String
-  phone String
+  ////////////////////////////////////////////////////////////
+  /// BASIC
+  ////////////////////////////////////////////////////////////
 
-  // Location info
+  name  String
+  email String?
+  phone String?
+
+  ////////////////////////////////////////////////////////////
+  /// LOCATION
+  ////////////////////////////////////////////////////////////
+
   currentLocation    String?
   preferredLocations String?
   hometown           String?
   pincode            String?
 
-  // Professional info
+  ////////////////////////////////////////////////////////////
+  /// PROFESSIONAL
+  ////////////////////////////////////////////////////////////
+
   totalExperience    Float?
   currentCompany     String?
   currentDesignation String?
   department         String?
   industry           String?
   skills             String?
-  currentSalary      Float?
-  expectedSalary     Float?
-  noticePeriodDays   Int?
 
-  // Education info
-  highestQualification String?
-  specialization       String?
-  university           String?
-  graduationYear       Int?
-
-  // Personal info
-  dateOfBirth   DateTime?
-  gender        String?
-  maritalStatus String?
+  currentSalary    Float? // ✅ RESTORED
+  expectedSalary   Float? // ✅ RESTORED
+  noticePeriodDays Int?
 
   ////////////////////////////////////////////////////////////
-  /// RESUME DATA
+  /// EDUCATION
+  ////////////////////////////////////////////////////////////
+
+  highestQualification String?
+
+  ////////////////////////////////////////////////////////////
+  /// RESUME
   ////////////////////////////////////////////////////////////
 
   resumeUrl  String?
   resumeText String?
+  resumeHash String? @unique
+
+  ////////////////////////////////////////////////////////////
+  /// SOURCE + CREATOR TRACKING
+  ////////////////////////////////////////////////////////////
 
   source CandidateSource @default(DIRECT_APPLY)
 
-  ////////////////////////////////////////////////////////////
+  createdByUserId    String? // ✅ RESTORED
+  createdByPartnerId String? // ✅ RESTORED
 
-  createdByUserId    String?
-  createdByPartnerId String?
+  ////////////////////////////////////////////////////////////
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   applications Application[]
 
-  @@unique([email, phone])
   @@index([email])
   @@index([phone])
 }

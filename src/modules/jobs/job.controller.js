@@ -1,4 +1,5 @@
 const jobService = require("./job.service");
+const jobJDProcessor = require("./services/job.jd.processor"); // new
 
 ////////////////////////////////////////////////////////
 // CREATE JOB (ADMIN)
@@ -10,6 +11,7 @@ async function createJob(req, res) {
       jrCode,
       title,
       description,
+      jd,
       companyName,
       department,
       location,
@@ -26,10 +28,10 @@ async function createJob(req, res) {
     } = req.body;
 
     //////////////////////////////////////////////////////
-    // VALIDATION
+    // VALIDATION (FIXED)
     //////////////////////////////////////////////////////
 
-    if (!title) {
+    if (!title || !companyName || !location) {
       return res.status(400).json({
         success: false,
         message: "title, companyName and location are required",
@@ -44,6 +46,7 @@ async function createJob(req, res) {
       jrCode,
       title,
       description,
+      jd,
       companyName,
       department,
       location,
@@ -55,21 +58,15 @@ async function createJob(req, res) {
       skills,
       education,
       status,
+      source: jd ? "JD_UPLOAD" : "MANUAL",
       requestDate,
       closureDate,
-
       createdById: req.user.userId,
     });
 
-    //////////////////////////////////////////////////////
-    // RESPONSE
-    //////////////////////////////////////////////////////
-
     return res.status(201).json({
       success: true,
-
       message: "Job created successfully",
-
       data: job,
     });
   } catch (error) {
@@ -77,7 +74,6 @@ async function createJob(req, res) {
 
     return res.status(500).json({
       success: false,
-
       message: error.message || "Failed to create job",
     });
   }
@@ -186,6 +182,36 @@ async function uploadJobsCSV(req, res) {
 }
 
 ////////////////////////////////////////////////////////
+// PARSE JOB JD (NO DB WRITE)
+////////////////////////////////////////////////////////
+
+async function parseJobJDs(req, res) {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one JD file is required",
+      });
+    }
+
+    const result = await jobJDProcessor.processJobJDs(req.files);
+
+    return res.json({
+      success: true,
+      message: "JDs parsed successfully",
+      ...result,
+    });
+  } catch (error) {
+    console.error("JD parse error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "JD parsing failed",
+    });
+  }
+}
+
+////////////////////////////////////////////////////////
 // UPDATE JOB
 ////////////////////////////////////////////////////////
 
@@ -248,4 +274,5 @@ module.exports = {
   getJobById,
   updateJob,
   deleteJob,
+  parseJobJDs,
 };

@@ -13,6 +13,7 @@ const partnerDashboardRoutes = require("./modules/partner/dashboard/partnerDashb
 const userDashboardRoutes = require("./modules/user/dashboard/userDashboard.routes");
 const recruiterDashboardRoutes = require("./modules/recruiter/dashboard/recruiterDashboard.routes");
 const adminResumeRoutes = require("./modules/admin/resume/adminResume.routes");
+const adminCsvRoutes = require("./modules/admin/csv/adminCsv.routes");
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use("/applications", applicationRoutes);
 app.use("/admin/dashboard", adminDashboardRoutes);
 app.use("/admin/recruiters", adminRecruiterRoutes);
 app.use("/admin/resumes", adminResumeRoutes);
+app.use("/admin/csv", adminCsvRoutes);
 app.use("/recruiter/dashboard", recruiterDashboardRoutes);
 app.use("/partner/dashboard", partnerDashboardRoutes);
 app.use("/user/dashboard", userDashboardRoutes);

@@ -9,13 +9,18 @@ async function uploadResumes(req, res) {
       });
     }
 
-    const parsedResumes = await resumeService.processResumes(req.files);
+    // ✅ UPDATED: destructure new response
+    const { summary, results } = await resumeService.processResumes(req.files);
 
     return res.status(200).json({
       success: true,
       message: "Resumes processed successfully",
-      count: parsedResumes.length,
-      resumes: parsedResumes,
+
+      // ✅ summary (total, created, duplicate, etc.)
+      ...summary,
+
+      // ✅ detailed logs
+      results,
     });
   } catch (error) {
     console.error("Resume upload error:", error);
@@ -23,7 +28,7 @@ async function uploadResumes(req, res) {
     return res.status(500).json({
       success: false,
       message: "Internal server error",
-      error: error.message,
+      error: error.message, // ✅ helpful debugging
     });
   }
 }

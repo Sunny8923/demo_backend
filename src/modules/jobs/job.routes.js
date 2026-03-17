@@ -6,6 +6,7 @@ const jobController = require("./job.controller");
 const authMiddleware = require("../../middlewares/auth.middleware");
 const requireRole = require("../../middlewares/requireRole.middleware");
 const upload = require("../../middlewares/upload.middleware");
+const uploadResume = require("../../middlewares/uploadResume.middleware");
 
 ////////////////////////////////////////////////////////
 // CREATE JOB
@@ -29,6 +30,14 @@ router.post(
   requireRole("ADMIN"),
   upload.single("file"),
   jobController.uploadJobsCSV,
+);
+
+router.post(
+  "/parse-jd",
+  authMiddleware,
+  requireRole("ADMIN"),
+  uploadResume.array("files"),
+  jobController.parseJobJDs,
 );
 
 ////////////////////////////////////////////////////////
