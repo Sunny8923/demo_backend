@@ -11,7 +11,15 @@ const prisma = require("../../../config/prisma");
 
 const candidateService = require("../services/candidate.service");
 
+const vision = require("@google-cloud/vision");
+const { exec } = require("child_process");
+const util = require("util");
+
+const execPromise = util.promisify(exec);
+
 const limit = pLimit(process.env.AI_CONCURRENCY || 5);
+
+const visionClient = new vision.ImageAnnotatorClient();
 
 ////////////////////////////////////////////////////////////
 /// HELPERS
@@ -117,6 +125,57 @@ async function parseResume(file) {
   if (ext === ".txt") return parseTXT(file.path);
 
   return "";
+}
+
+////////////////////////////////////////////////////////////
+/// VISION OCR FALLBACK (PDF → IMAGE → TEXT)
+////////////////////////////////////////////////////////////
+
+async function extractTextWithVision(pdfPath) {
+  try {
+    const outputPrefix = pdfPath.replace(".pdf", "");
+
+    ////////////////////////////////////////////////////////////
+    /// CONVERT PDF → IMAGES (FIRST 2 PAGES)
+    ////////////////////////////////////////////////////////////
+
+    await execPromise(`pdftoppm -png -f 1 -l 2 "${pdfPath}" "${outputPrefix}"`);
+
+    ////////////////////////////////////////////////////////////
+    /// COLLECT IMAGES
+    ////////////////////////////////////////////////////////////
+
+    const imagePaths = [
+      `${outputPrefix}-1.png`,
+      `${outputPrefix}-2.png`,
+    ].filter((p) => fs.existsSync(p));
+
+    let fullText = "";
+
+    ////////////////////////////////////////////////////////////
+    /// OCR EACH IMAGE
+    ////////////////////////////////////////////////////////////
+
+    for (const imgPath of imagePaths) {
+      const [result] = await visionClient.textDetection(imgPath);
+
+      const detections = result.textAnnotations;
+
+      if (detections && detections.length > 0) {
+        fullText += detections[0].description + "\n";
+      }
+
+      ////////////////////////////////////////////////////////////
+      /// DELETE IMAGE AFTER USE
+      ////////////////////////////////////////////////////////////
+      fs.unlink(imgPath, () => {});
+    }
+
+    return fullText;
+  } catch (error) {
+    console.error("Vision OCR failed:", error.message);
+    return "";
+  }
 }
 
 ////////////////////////////////////////////////////////////
@@ -275,18 +334,37 @@ ${resumeText.slice(0, 12000)}
 
 async function processSingleResume(file, index) {
   try {
-    const rawText = await parseResume(file);
-    const text = cleanResumeText(rawText);
+    let rawText = await parseResume(file);
+    let text = cleanResumeText(rawText);
+
+    ////////////////////////////////////////////////////////////
+    /// 🔥 FALLBACK TO GOOGLE VISION (ONLY FOR PDF)
+    ////////////////////////////////////////////////////////////
+
+    const ext = path.extname(file.originalname).toLowerCase();
+
+    if (ext === ".pdf" && text.length < 300) {
+      console.log(`⚡ Using Vision OCR for: ${file.originalname}`);
+
+      const visionText = await extractTextWithVision(file.path);
+
+      if (visionText && visionText.length > 100) {
+        text = cleanResumeText(visionText);
+      }
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// FINAL VALIDATION
+    ////////////////////////////////////////////////////////////
 
     if (!text || text.length < 200) {
       return {
         row: index + 1,
         fileName: file.originalname,
         status: "error",
-        error: "Empty resume",
+        error: "Empty or unreadable resume",
       };
     }
-
     const hash = generateHash(text);
 
     const basic = extractBasicInfo(text);

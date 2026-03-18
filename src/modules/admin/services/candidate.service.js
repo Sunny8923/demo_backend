@@ -1,7 +1,8 @@
 const prisma = require("../../../config/prisma");
+const { getEmbedding } = require("../../../utils/embedding");
 
 ////////////////////////////////////////////////////////////
-/// HELPERS (ADD THESE)
+/// HELPERS
 ////////////////////////////////////////////////////////////
 
 function isValidEmail(email) {
@@ -58,7 +59,7 @@ function normalizeSkills(skills) {
 }
 
 ////////////////////////////////////////////////////////////
-/// MAIN FUNCTION
+/// MERGE HELPERS
 ////////////////////////////////////////////////////////////
 
 function mergeValues(oldVal, newVal) {
@@ -75,7 +76,16 @@ function mergeSkills(oldSkills, newSkills) {
   return merged.filter(Boolean).join(", ");
 }
 
+////////////////////////////////////////////////////////////
+/// BUILD UPDATE DATA
+////////////////////////////////////////////////////////////
+
 function buildUpdateData(existing, data, extra) {
+  const mergedSkills = mergeSkills(
+    existing.skills,
+    normalizeSkills(data.skills),
+  );
+
   return {
     name: mergeValues(existing.name, data.name),
 
@@ -101,10 +111,18 @@ function buildUpdateData(existing, data, extra) {
     department: mergeValues(existing.department, data.department),
     industry: mergeValues(existing.industry, data.industry),
 
-    skills: mergeSkills(existing.skills, normalizeSkills(data.skills)),
+    ////////////////////////////////////////////////////////////
+    /// SKILLS
+    ////////////////////////////////////////////////////////////
+
+    skills: mergedSkills,
+    skillsArray: mergedSkills
+      ? mergedSkills.split(",").map((s) => s.trim().toLowerCase())
+      : existing.skillsArray || [],
+
+    ////////////////////////////////////////////////////////////
 
     currentSalary: existing.currentSalary ?? parseSalary(data.currentSalary),
-
     expectedSalary: existing.expectedSalary ?? parseSalary(data.expectedSalary),
 
     noticePeriodDays:
@@ -121,10 +139,15 @@ function buildUpdateData(existing, data, extra) {
   };
 }
 
+////////////////////////////////////////////////////////////
+/// MAIN FUNCTION
+////////////////////////////////////////////////////////////
+
 async function createOrFindCandidate(data, source, extra = {}) {
   const email = isValidEmail(data.email)
     ? data.email.toLowerCase().trim()
     : null;
+
   const phone = normalizePhone(data.phone);
 
   if (!email && !phone) return null;
@@ -143,6 +166,10 @@ async function createOrFindCandidate(data, source, extra = {}) {
     },
   });
 
+  ////////////////////////////////////////////////////////////
+  /// UPDATE EXISTING
+  ////////////////////////////////////////////////////////////
+
   if (existing) {
     const updated = await prisma.candidate.update({
       where: { id: existing.id },
@@ -157,6 +184,27 @@ async function createOrFindCandidate(data, source, extra = {}) {
 
   ////////////////////////////////////////////////////////////
   /// CREATE NEW
+  ////////////////////////////////////////////////////////////
+
+  const normalizedSkills = normalizeSkills(data.skills);
+
+  ////////////////////////////////////////////////////////////
+  /// 🔥 EMBEDDING (ONLY HERE)
+  ////////////////////////////////////////////////////////////
+
+  const candidateText = `
+${data.currentDesignation || ""}
+${normalizedSkills || ""}
+`;
+
+  let embedding = null;
+
+  try {
+    embedding = await getEmbedding(candidateText);
+  } catch (err) {
+    console.error("Embedding failed:", err.message);
+  }
+
   ////////////////////////////////////////////////////////////
 
   const created = await prisma.candidate.create({
@@ -177,7 +225,10 @@ async function createOrFindCandidate(data, source, extra = {}) {
       department: data.department || null,
       industry: data.industry || null,
 
-      skills: normalizeSkills(data.skills),
+      skills: normalizedSkills,
+      skillsArray: normalizedSkills
+        ? normalizedSkills.split(",").map((s) => s.trim().toLowerCase())
+        : [],
 
       currentSalary: parseSalary(data.currentSalary),
       expectedSalary: parseSalary(data.expectedSalary),
@@ -188,6 +239,14 @@ async function createOrFindCandidate(data, source, extra = {}) {
       resumeUrl: extra.resumeUrl || data.resumeUrl || null,
       resumeText: extra.resumeText || null,
       resumeHash: extra.resumeHash || null,
+
+      ////////////////////////////////////////////////////////////
+      /// 🔥 SAVE EMBEDDING
+      ////////////////////////////////////////////////////////////
+
+      embedding,
+
+      ////////////////////////////////////////////////////////////
 
       source,
     },

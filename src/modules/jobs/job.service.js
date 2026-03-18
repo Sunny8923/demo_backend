@@ -2,6 +2,7 @@ const prisma = require("../../config/prisma");
 const fs = require("fs");
 const csv = require("csv-parser");
 const openai = require("../../config/openai");
+const { getEmbedding } = require("../../utils/embedding");
 
 ////////////////////////////////////////////////////////
 // STANDARD FIELDS
@@ -119,11 +120,49 @@ function normalizeStatus(status) {
   return allowed.includes(normalized) ? normalized : "OPEN";
 }
 
+function normalizeSkills(skills) {
+  if (!skills) return null;
+
+  return skills
+    .split(/[,|]/)
+    .map((s) =>
+      s.toLowerCase().replace(/\.js/g, "").replace(/\s+/g, " ").trim(),
+    )
+    .filter(Boolean)
+    .join(", ");
+}
+
 ////////////////////////////////////////////////////////
 // CREATE JOB
 ////////////////////////////////////////////////////////
 
 async function createJob(data) {
+  ////////////////////////////////////////////////////////////
+  // NORMALIZE SKILLS
+  ////////////////////////////////////////////////////////////
+
+  const normalizedSkills = normalizeSkills(data.skills);
+
+  ////////////////////////////////////////////////////////////
+  // PREPARE EMBEDDING TEXT (CHEAP + SHORT)
+  ////////////////////////////////////////////////////////////
+
+  const jobText = `
+${data.title || ""}
+${data.description || ""}
+${normalizedSkills || ""}
+`;
+
+  let embedding = null;
+
+  try {
+    embedding = await getEmbedding(jobText);
+  } catch (err) {
+    console.error("Job embedding failed:", err.message);
+  }
+
+  ////////////////////////////////////////////////////////////
+
   return prisma.job.create({
     data: {
       jrCode: safeString(data.jrCode),
@@ -142,7 +181,17 @@ async function createJob(data) {
 
       openings: safeInt(data.openings) || 1,
 
-      skills: safeString(data.skills),
+      ////////////////////////////////////////////////////////////
+      // ✅ UPDATED SKILLS
+      ////////////////////////////////////////////////////////////
+
+      skills: normalizedSkills,
+      skillsArray: normalizedSkills
+        ? normalizedSkills.split(",").map((s) => s.trim().toLowerCase())
+        : [],
+
+      ////////////////////////////////////////////////////////////
+
       education: safeString(data.education),
 
       status: normalizeStatus(data.status),
@@ -153,6 +202,14 @@ async function createJob(data) {
       closureDate: safeDate(data.closureDate),
 
       extraData: data.extraData || null,
+
+      ////////////////////////////////////////////////////////////
+      // ✅ ADD THIS (IMPORTANT)
+      ////////////////////////////////////////////////////////////
+
+      embedding,
+
+      ////////////////////////////////////////////////////////////
 
       createdById: data.createdById,
     },
@@ -245,6 +302,7 @@ async function createJobsFromCSV(filePath, createdById) {
 
           const headers = Object.keys(rows[0] || {});
           const aiMapping = await getHeaderMapping(headers);
+          const normalizedSkills = normalizeSkills(aiMapped.skills);
 
           const normalizedMapping = {};
 
@@ -324,7 +382,12 @@ async function createJobsFromCSV(filePath, createdById) {
 
                 openings: safeInt(aiMapped.openings) || 1,
 
-                skills: safeString(aiMapped.skills),
+                skills: normalizedSkills,
+                skillsArray: normalizedSkills
+                  ? normalizedSkills
+                      .split(",")
+                      .map((s) => s.trim().toLowerCase())
+                  : [],
                 education: safeString(aiMapped.education),
 
                 status: normalizeStatus(aiMapped.status),

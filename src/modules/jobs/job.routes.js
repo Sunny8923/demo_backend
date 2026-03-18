@@ -41,6 +41,24 @@ router.post(
 );
 
 ////////////////////////////////////////////////////////
+// CREATE JOBS FROM JD (AFTER APPROVAL)
+////////////////////////////////////////////////////////
+
+router.post(
+  "/create-from-jd",
+  authMiddleware,
+  requireRole("ADMIN"),
+  jobController.createJobsFromJD,
+);
+
+router.get(
+  "/:id/match",
+  authMiddleware,
+  requireRole("ADMIN"),
+  jobController.matchCandidates,
+);
+
+////////////////////////////////////////////////////////
 // GET JOB BY ID (MUST BE AFTER upload-csv)
 ////////////////////////////////////////////////////////
 

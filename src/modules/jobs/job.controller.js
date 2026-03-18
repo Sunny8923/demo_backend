@@ -1,5 +1,7 @@
 const jobService = require("./job.service");
 const jobJDProcessor = require("./services/job.jd.processor"); // new
+const prisma = require("../../config/prisma");
+const jobMatchingService = require("./services/jobMatching.service");
 
 ////////////////////////////////////////////////////////
 // CREATE JOB (ADMIN)
@@ -75,6 +77,149 @@ async function createJob(req, res) {
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to create job",
+    });
+  }
+}
+
+////////////////////////////////////////////////////////
+// CREATE JOBS FROM JD (APPROVED AFTER PREVIEW)
+////////////////////////////////////////////////////////
+
+async function createJobsFromJD(req, res) {
+  try {
+    const { jobs } = req.body;
+
+    //////////////////////////////////////////////////////
+    // VALIDATION
+    //////////////////////////////////////////////////////
+
+    if (!jobs || !Array.isArray(jobs) || jobs.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Jobs array is required",
+      });
+    }
+
+    //////////////////////////////////////////////////////
+    // PROCESS JOBS
+    //////////////////////////////////////////////////////
+
+    const results = [];
+
+    const seen = new Set();
+
+    for (let i = 0; i < jobs.length; i++) {
+      const job = jobs[i];
+
+      try {
+        //////////////////////////////////////////////////////
+        // BASIC VALIDATION
+        //////////////////////////////////////////////////////
+
+        if (!job.title || !job.companyName || !job.location) {
+          results.push({
+            index: i,
+            status: "skipped",
+            error: "Missing required fields",
+          });
+          continue;
+        }
+
+        //////////////////////////////////////////////////////
+        // NORMALIZE KEY (for duplicate detection)
+        //////////////////////////////////////////////////////
+
+        const key = `${job.title}-${job.companyName}-${job.location}`
+          .toLowerCase()
+          .trim();
+
+        //////////////////////////////////////////////////////
+        // DUPLICATE IN SAME REQUEST
+        //////////////////////////////////////////////////////
+
+        if (seen.has(key)) {
+          results.push({
+            index: i,
+            status: "skipped",
+            error: "Duplicate in request",
+          });
+          continue;
+        }
+
+        seen.add(key);
+
+        //////////////////////////////////////////////////////
+        // DUPLICATE IN DATABASE
+        //////////////////////////////////////////////////////
+
+        const existing = await prisma.job.findFirst({
+          where: {
+            title: job.title,
+            companyName: job.companyName,
+            location: job.location,
+          },
+        });
+
+        if (existing) {
+          results.push({
+            index: i,
+            status: "skipped",
+            error: "Duplicate job in database",
+          });
+          continue;
+        }
+        //////////////////////////////////////////////////////
+        // CREATE JOB
+        //////////////////////////////////////////////////////
+
+        const created = await jobService.createJob({
+          ...job,
+
+          // fallback defaults
+          openings: job.openings || 1,
+          status: job.status || "OPEN",
+
+          source: "JD_UPLOAD",
+          createdById: req.user.userId,
+        });
+
+        results.push({
+          index: i,
+          status: "created",
+          jobId: created.id,
+        });
+      } catch (err) {
+        results.push({
+          index: i,
+          status: "error",
+          error: err.message,
+        });
+      }
+    }
+
+    //////////////////////////////////////////////////////
+    // SUMMARY
+    //////////////////////////////////////////////////////
+
+    const summary = {
+      total: jobs.length,
+      created: results.filter((r) => r.status === "created").length,
+      skipped: results.filter((r) => r.status === "skipped").length,
+      failed: results.filter((r) => r.status === "error").length,
+    };
+
+    return res.json({
+      success: true,
+      message: "JD jobs processed",
+      summary,
+      results,
+    });
+  } catch (error) {
+    console.error("CreateJobsFromJD error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to create jobs from JD",
     });
   }
 }
@@ -266,6 +411,31 @@ async function deleteJob(req, res) {
 }
 
 ////////////////////////////////////////////////////////
+// MATCH CANDIDATES
+////////////////////////////////////////////////////////
+
+async function matchCandidates(req, res) {
+  try {
+    const { id } = req.params;
+
+    const results = await jobMatchingService.matchCandidatesToJob(id);
+
+    return res.json({
+      success: true,
+      count: results.length,
+      data: results,
+    });
+  } catch (error) {
+    console.error("Matching error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Matching failed",
+    });
+  }
+}
+
+////////////////////////////////////////////////////////
 
 module.exports = {
   createJob,
@@ -275,4 +445,6 @@ module.exports = {
   updateJob,
   deleteJob,
   parseJobJDs,
+  createJobsFromJD,
+  matchCandidates,
 };
