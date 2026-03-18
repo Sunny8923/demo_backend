@@ -1,6 +1,7 @@
 const fs = require("fs");
 const csv = require("csv-parser");
 const openai = require("../../../config/openai");
+const pLimit = require("p-limit");
 
 // ✅ shared candidate service
 const candidateService = require("../services/candidate.service");
@@ -172,142 +173,180 @@ function normalizePhone(phone) {
 ////////////////////////////////////////////////////////////
 
 async function processCSV(filePath) {
-  return new Promise((resolve, reject) => {
-    const results = [];
+  const results = [];
 
-    fs.createReadStream(filePath)
-      .pipe(csv())
-      .on("data", (row) => results.push(row))
-      .on("end", async () => {
-        try {
-          if (results.length === 0) {
-            return resolve({ summary: {}, results: [] });
-          }
+  try {
+    ////////////////////////////////////////////////////////////
+    /// READ CSV
+    ////////////////////////////////////////////////////////////
 
-          const headers = Object.keys(results[0]).map((h) => h.trim());
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(filePath)
+        .pipe(csv())
+        .on("data", (row) => results.push(row))
+        .on("end", resolve)
+        .on("error", reject);
+    });
 
-          const aiMapping = await getHeaderMapping(headers);
+    if (results.length === 0) {
+      return { summary: {}, results: [] };
+    }
 
-          const normalizedMapping = {};
+    const headers = Object.keys(results[0]).map((h) => h.trim());
 
-          if (aiMapping) {
-            for (const key in aiMapping) {
-              normalizedMapping[normalizeHeaderKey(key)] = aiMapping[key];
+    ////////////////////////////////////////////////////////////
+    /// AI MAPPING
+    ////////////////////////////////////////////////////////////
+
+    const aiMapping = await getHeaderMapping(headers);
+
+    const normalizedMapping = {};
+
+    if (aiMapping) {
+      for (const key in aiMapping) {
+        normalizedMapping[normalizeHeaderKey(key)] = aiMapping[key];
+      }
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// DUPLICATE TRACKING
+    ////////////////////////////////////////////////////////////
+
+    const seen = new Set();
+
+    ////////////////////////////////////////////////////////////
+    /// CONCURRENCY CONTROL
+    ////////////////////////////////////////////////////////////
+
+    const limit = pLimit(10);
+
+    async function processRow(row, i) {
+      try {
+        let mapped = {};
+
+        ////////////////// AI //////////////////
+
+        if (Object.keys(normalizedMapping).length > 0) {
+          for (const key of headers) {
+            const target = normalizedMapping[normalizeHeaderKey(key)];
+
+            if (target && STANDARD_FIELDS.includes(target)) {
+              mapped[target] = row[key];
             }
           }
-
-          const processed = [];
-
-          ////////////////////////////////////////////////////////////
-          /// LOOP
-          ////////////////////////////////////////////////////////////
-
-          for (let i = 0; i < results.length; i++) {
-            const row = results[i];
-
-            try {
-              let mapped = {};
-
-              ////////////////// AI //////////////////
-
-              if (Object.keys(normalizedMapping).length > 0) {
-                for (const key of headers) {
-                  const target = normalizedMapping[normalizeHeaderKey(key)];
-
-                  if (target && STANDARD_FIELDS.includes(target)) {
-                    mapped[target] = row[key];
-                  }
-                }
-              }
-
-              ////////////////// FALLBACK //////////////////
-
-              const fallback = mapRow(row);
-
-              for (const key in fallback) {
-                if (!mapped[key]) mapped[key] = fallback[key];
-              }
-
-              ////////////////// CLEAN //////////////////
-
-              Object.keys(mapped).forEach((k) => {
-                mapped[k] = mapped[k]?.toString().trim() || null;
-              });
-
-              const email = isValidEmail(mapped.email)
-                ? mapped.email
-                : undefined;
-
-              const phone = normalizePhone(mapped.phone) || undefined;
-
-              ////////////////// VALIDATION //////////////////
-
-              if (!email && !phone) {
-                processed.push({
-                  row: i + 1,
-                  status: "skipped",
-                  reason: "No email/phone",
-                });
-                continue;
-              }
-
-              ////////////////// CREATE //////////////////
-
-              const result = await candidateService.createOrFindCandidate(
-                mapped,
-                "ADMIN_CSV_UPLOAD",
-              );
-
-              if (!result) {
-                processed.push({
-                  row: i + 1,
-                  status: "skipped",
-                  reason: "Invalid candidate",
-                });
-              } else {
-                processed.push({
-                  row: i + 1,
-                  status: result.isNew ? "created" : "duplicate",
-                  candidateId: result.candidate.id,
-                });
-              }
-            } catch (err) {
-              processed.push({
-                row: i + 1,
-                status: "error",
-                error: err.message,
-                data: row,
-              });
-            }
-          }
-
-          ////////////////////////////////////////////////////////////
-          /// SUMMARY
-          ////////////////////////////////////////////////////////////
-
-          const summary = {
-            total: processed.length,
-            created: processed.filter((r) => r.status === "created").length,
-            duplicate: processed.filter((r) => r.status === "duplicate").length,
-            skipped: processed.filter((r) => r.status === "skipped").length,
-            error: processed.filter((r) => r.status === "error").length,
-          };
-
-          ////////////////////////////////////////////////////////////
-          /// CLEANUP
-          ////////////////////////////////////////////////////////////
-
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          }
-
-          resolve({ summary, results: processed });
-        } catch (err) {
-          reject(err);
         }
-      })
-      .on("error", reject);
-  });
+
+        ////////////////// FALLBACK //////////////////
+
+        const fallback = mapRow(row);
+
+        for (const key in fallback) {
+          if (!mapped[key]) mapped[key] = fallback[key];
+        }
+
+        ////////////////// CLEAN //////////////////
+
+        Object.keys(mapped).forEach((k) => {
+          mapped[k] = mapped[k]?.toString().trim() || null;
+        });
+
+        const email = isValidEmail(mapped.email)
+          ? mapped.email.toLowerCase()
+          : undefined;
+
+        const phone = normalizePhone(mapped.phone) || undefined;
+
+        ////////////////// DUP CHECK //////////////////
+
+        const uniqueKey = email || phone;
+
+        if (uniqueKey) {
+          if (seen.has(uniqueKey)) {
+            return {
+              row: i + 1,
+              status: "duplicate",
+              reason: "Duplicate in CSV",
+            };
+          }
+          seen.add(uniqueKey);
+        }
+
+        ////////////////// VALIDATION //////////////////
+
+        if (!email && !phone) {
+          return {
+            row: i + 1,
+            status: "skipped",
+            reason: "No email/phone",
+          };
+        }
+
+        ////////////////// CREATE //////////////////
+
+        const result = await candidateService.createOrFindCandidate(
+          mapped,
+          "ADMIN_CSV_UPLOAD",
+        );
+
+        if (!result) {
+          return {
+            row: i + 1,
+            status: "skipped",
+            reason: "Invalid candidate",
+          };
+        }
+
+        return {
+          row: i + 1,
+          status: result.isNew ? "created" : "duplicate",
+          candidateId: result.candidate.id,
+        };
+      } catch (err) {
+        return {
+          row: i + 1,
+          status: "error",
+          error: err.message,
+          data: row,
+        };
+      }
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// PROCESS ALL ROWS
+    ////////////////////////////////////////////////////////////
+
+    const processed = await Promise.all(
+      results.map((row, i) => limit(() => processRow(row, i))),
+    );
+
+    ////////////////////////////////////////////////////////////
+    /// SUMMARY
+    ////////////////////////////////////////////////////////////
+
+    const summary = {
+      total: processed.length,
+      created: processed.filter((r) => r.status === "created").length,
+      duplicate: processed.filter((r) => r.status === "duplicate").length,
+      skipped: processed.filter((r) => r.status === "skipped").length,
+      error: processed.filter((r) => r.status === "error").length,
+    };
+
+    return { summary, results: processed };
+  } catch (err) {
+    throw err;
+  } finally {
+    ////////////////////////////////////////////////////////////
+    /// CLEANUP (SAFE)
+    ////////////////////////////////////////////////////////////
+
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (cleanupErr) {
+      console.error("File cleanup failed:", cleanupErr.message);
+    }
+  }
 }
 
 module.exports = {

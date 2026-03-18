@@ -97,18 +97,18 @@ enum JobStatus {
 }
 
 model UploadJob {
-  id        String   @id @default(cuid())
+  id String @id @default(cuid())
 
   status    String
   total     Int
-  processed Int      @default(0)
+  processed Int    @default(0)
 
-  created   Int      @default(0)
-  duplicate Int      @default(0)
-  skipped   Int      @default(0)
-  error     Int      @default(0)
+  created   Int @default(0)
+  duplicate Int @default(0)
+  skipped   Int @default(0)
+  error     Int @default(0)
 
-  results   Json?    // 👈 store per-file results
+  results Json? // 👈 store per-file results
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

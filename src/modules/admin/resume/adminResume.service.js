@@ -21,6 +21,15 @@ function isValidEmail(email) {
   return /\S+@\S+\.\S+/.test(email);
 }
 
+function withTimeout(promise, ms = 20000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("OpenAI timeout")), ms),
+    ),
+  ]);
+}
+
 function extractBasicInfo(text) {
   const emailMatch = text.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
   const phoneMatch = text.match(/\+?\d[\d\s-]{8,15}/);
@@ -249,7 +258,7 @@ ${resumeText.slice(0, 12000)}
     ////////////////////////////////////////////////////////////
 
     for (let i = 0; i < 2; i++) {
-      const result = await callOpenAI(prompt);
+      const result = await withTimeout(callOpenAI(prompt), 20000);
       if (result) return result;
     }
 
@@ -356,11 +365,22 @@ async function processResumes(files, jobId) {
         extracted.map((f, i) => limit(() => processSingleResume(f, index + i))),
       );
 
+      // ✅ DELETE EXTRACTED FILES
+      for (const f of extracted) {
+        fs.unlink(f.path, () => {});
+      }
+
       index += extracted.length;
-      fs.unlinkSync(file.path);
+
+      // ✅ DELETE ZIP
+      fs.unlink(file.path, () => {});
     } else {
       const result = await limit(() => processSingleResume(file, index));
       results = [result];
+
+      // ✅ DELETE FILE AFTER PROCESSING
+      fs.unlink(file.path, () => {});
+
       index++;
     }
 

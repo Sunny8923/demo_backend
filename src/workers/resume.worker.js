@@ -19,6 +19,7 @@ const worker = new Worker(
   },
   {
     connection,
+    concurrency: 3,
   },
 );
 

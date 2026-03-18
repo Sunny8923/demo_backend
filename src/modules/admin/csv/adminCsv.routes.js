@@ -8,7 +8,15 @@ const requireRole = require("../../../middlewares/requireRole.middleware");
 
 const multer = require("multer");
 
-const upload = multer({ dest: "uploads/csv/" });
+const upload = multer({
+  dest: "uploads/csv/",
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype !== "text/csv" && !file.originalname.endsWith(".csv")) {
+      return cb(new Error("Only CSV files allowed"), false);
+    }
+    cb(null, true);
+  },
+});
 
 router.post(
   "/upload-csv",
