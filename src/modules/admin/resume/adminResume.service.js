@@ -137,13 +137,7 @@ async function parseResume(file) {
 
 async function extractTextWithVision(pdfPath) {
   try {
-    const fileBuffer = fs.readFileSync(pdfPath);
-
-    const [result] = await visionClient.documentTextDetection({
-      image: {
-        content: fileBuffer.toString("base64"),
-      },
-    });
+    const [result] = await visionClient.documentTextDetection(pdfPath);
 
     const text = result.fullTextAnnotation?.text || "";
 
