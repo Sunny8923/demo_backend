@@ -85,6 +85,7 @@ async function uploadResumes(req, res) {
         {
           files: safeFiles,
           jobId: job.id,
+          total,
         },
         {
           attempts: 3,

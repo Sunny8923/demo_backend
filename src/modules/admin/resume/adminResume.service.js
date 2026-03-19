@@ -430,69 +430,106 @@ async function processSingleResume(file, index) {
 /// MAIN PROCESSOR
 ////////////////////////////////////////////////////////////
 
-async function processResumes(files, jobId) {
+async function safeUnlink(filePath) {
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (err) {
+    console.warn("File delete failed:", filePath);
+  }
+}
+
+async function processResumes(files, jobId, job, total) {
   const processed = [];
   let index = 0;
 
   for (const file of files) {
     const ext = path.extname(file.originalname).toLowerCase();
-
     let results = [];
 
-    if (ext === ".zip") {
-      const extracted = await extractZip(file.path);
+    try {
+      ////////////////////////////////////////////////////////////
+      /// ZIP FILE
+      ////////////////////////////////////////////////////////////
+      if (ext === ".zip") {
+        const extracted = await extractZip(file.path);
 
-      results = await Promise.all(
-        extracted.map((f, i) => limit(() => processSingleResume(f, index + i))),
-      );
+        results = await Promise.all(
+          extracted.map((f, i) =>
+            limit(() => processSingleResume(f, index + i)),
+          ),
+        );
 
-      // ✅ DELETE EXTRACTED FILES
-      for (const f of extracted) {
-        fs.unlink(f.path, () => {});
+        // ✅ delete extracted files safely
+        for (const f of extracted) {
+          await safeUnlink(f.path);
+        }
+
+        index += extracted.length;
+
+        // ✅ delete zip
+        await safeUnlink(file.path);
       }
 
-      index += extracted.length;
+      ////////////////////////////////////////////////////////////
+      /// NORMAL FILE
+      ////////////////////////////////////////////////////////////
+      else {
+        const result = await limit(() => processSingleResume(file, index));
 
-      // ✅ DELETE ZIP
-      fs.unlink(file.path, () => {});
-    } else {
-      const result = await limit(() => processSingleResume(file, index));
-      results = [result];
+        results = [result];
 
-      // ✅ DELETE FILE AFTER PROCESSING
-      fs.unlink(file.path, () => {});
+        await safeUnlink(file.path);
 
-      index++;
+        index++;
+      }
+
+      ////////////////////////////////////////////////////////////
+      /// STORE RESULTS
+      ////////////////////////////////////////////////////////////
+      processed.push(...results);
+
+      ////////////////////////////////////////////////////////////
+      /// COUNT STATUS
+      ////////////////////////////////////////////////////////////
+      let created = 0;
+      let duplicate = 0;
+      let skipped = 0;
+      let error = 0;
+
+      for (const r of results) {
+        if (r.status === "created") created++;
+        else if (r.status === "duplicate") duplicate++;
+        else if (r.status === "skipped") skipped++;
+        else if (r.status === "error") error++;
+      }
+
+      ////////////////////////////////////////////////////////////
+      /// 🔥 UPDATE DB PROGRESS
+      ////////////////////////////////////////////////////////////
+      await prisma.uploadJob.update({
+        where: { id: jobId },
+        data: {
+          processed: { increment: results.length },
+          created: { increment: created },
+          duplicate: { increment: duplicate },
+          skipped: { increment: skipped },
+          error: { increment: error },
+        },
+      });
+
+      ////////////////////////////////////////////////////////////
+      /// 🔥 UPDATE BULLMQ PROGRESS (REAL-TIME)
+      ////////////////////////////////////////////////////////////
+      if (job && total) {
+        await job.updateProgress({
+          current: index,
+          total,
+          percentage: Math.round((index / total) * 100),
+        });
+      }
+    } catch (err) {
+      console.error("Processing error:", err.message);
     }
-
-    processed.push(...results);
-
-    let created = 0;
-    let duplicate = 0;
-    let skipped = 0;
-    let error = 0;
-
-    for (const r of results) {
-      if (r.status === "created") created++;
-      else if (r.status === "duplicate") duplicate++;
-      else if (r.status === "skipped") skipped++;
-      else if (r.status === "error") error++;
-    }
-
-    ////////////////////////////////////////////////////////////
-    /// 🔥 UPDATE JOB PROGRESS
-    ////////////////////////////////////////////////////////////
-
-    await prisma.uploadJob.update({
-      where: { id: jobId },
-      data: {
-        processed: { increment: results.length },
-        created: { increment: created },
-        duplicate: { increment: duplicate },
-        skipped: { increment: skipped },
-        error: { increment: error },
-      },
-    });
   }
 
   ////////////////////////////////////////////////////////////
@@ -502,9 +539,21 @@ async function processResumes(files, jobId) {
     where: { id: jobId },
     data: {
       status: "completed",
-      results: processed, // 👈 store all results
+      results: processed,
     },
   });
+
+  ////////////////////////////////////////////////////////////
+  /// FINAL BULLMQ PROGRESS
+  ////////////////////////////////////////////////////////////
+  if (job && total) {
+    await job.updateProgress({
+      current: total,
+      total,
+      percentage: 100,
+    });
+  }
+
   return processed;
 }
 
