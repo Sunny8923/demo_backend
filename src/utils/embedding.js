@@ -1,5 +1,29 @@
 const openai = require("../config/openai");
 
+////////////////////////////////////////////////////////////
+/// STRUCTURED TEXT BUILDERS (VERY IMPORTANT)
+////////////////////////////////////////////////////////////
+
+function buildCandidateEmbeddingText(candidate) {
+  return `
+Skills: ${(candidate.skillsArray || []).join(", ")}
+Experience: ${candidate.totalExperience || 0} years
+Current Role: ${candidate.currentRole || ""}
+`.trim();
+}
+
+function buildJobEmbeddingText(job) {
+  return `
+Required Skills: ${(job.skillsArray || []).join(", ")}
+Minimum Experience: ${job.minExperience || 0} years
+Job Title: ${job.title || ""}
+`.trim();
+}
+
+////////////////////////////////////////////////////////////
+/// GET EMBEDDING
+////////////////////////////////////////////////////////////
+
 async function getEmbedding(text) {
   try {
     const res = await openai.embeddings.create({
@@ -14,8 +38,12 @@ async function getEmbedding(text) {
   }
 }
 
+////////////////////////////////////////////////////////////
+/// COSINE SIMILARITY (SAFE)
+////////////////////////////////////////////////////////////
+
 function cosineSimilarity(a, b) {
-  if (!a || !b) return 0;
+  if (!a || !b || a.length !== b.length) return 0;
 
   let dot = 0;
   let magA = 0;
@@ -27,10 +55,14 @@ function cosineSimilarity(a, b) {
     magB += b[i] * b[i];
   }
 
-  magA = Math.sqrt(magA);
-  magB = Math.sqrt(magB);
+  if (magA === 0 || magB === 0) return 0;
 
-  return dot / (magA * magB);
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-module.exports = { getEmbedding, cosineSimilarity };
+module.exports = {
+  getEmbedding,
+  cosineSimilarity,
+  buildCandidateEmbeddingText,
+  buildJobEmbeddingText,
+};

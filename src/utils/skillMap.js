@@ -8,11 +8,14 @@ const SKILL_MAP = {
   reactjs: "react",
   angularjs: "angular",
   vuejs: "vue",
+  nextjs: "next",
+  "next.js": "next",
 
   // backend
   nodejs: "node",
   "node.js": "node",
   expressjs: "express",
+  nestjs: "nestjs",
 
   // database
   mongodb: "mongo",
@@ -28,6 +31,10 @@ const SKILL_MAP = {
   // languages
   js: "javascript",
   ts: "typescript",
+  cpp: "c++",
+
+  // styling
+  tailwindcss: "tailwind",
 };
 
 ////////////////////////////////////////////////////////////
@@ -37,17 +44,23 @@ const SKILL_MAP = {
 function normalizeSkill(skill) {
   if (!skill) return null;
 
-  const cleaned = skill.toLowerCase().trim();
+  let cleaned = skill.toLowerCase().trim();
+
+  // remove symbols (node.js -> nodejs)
+  cleaned = cleaned.replace(/[^\w\s]/g, "");
+
+  // normalize separators (machine-learning -> machine learning)
+  cleaned = cleaned.replace(/[-_]/g, " ");
 
   return SKILL_MAP[cleaned] || cleaned;
 }
 
 ////////////////////////////////////////////////////////////
-/// NORMALIZE ARRAY
+/// NORMALIZE ARRAY (DEDUPED)
 ////////////////////////////////////////////////////////////
 
 function normalizeSkillsArray(arr = []) {
-  return arr.map(normalizeSkill).filter(Boolean);
+  return [...new Set(arr.map(normalizeSkill).filter(Boolean))];
 }
 
 module.exports = {

@@ -2,7 +2,10 @@ const prisma = require("../../config/prisma");
 const fs = require("fs");
 const csv = require("csv-parser");
 const openai = require("../../config/openai");
-const { getEmbedding } = require("../../utils/embedding");
+const {
+  getEmbedding,
+  buildJobEmbeddingText,
+} = require("../../utils/embedding");
 
 ////////////////////////////////////////////////////////
 // STANDARD FIELDS
@@ -147,11 +150,13 @@ async function createJob(data) {
   // PREPARE EMBEDDING TEXT (CHEAP + SHORT)
   ////////////////////////////////////////////////////////////
 
-  const jobText = `
-${data.title || ""}
-${data.description || ""}
-${normalizedSkills || ""}
-`;
+  const jobText = buildJobEmbeddingText({
+    title: data.title,
+    skillsArray: normalizedSkills
+      ? normalizedSkills.split(",").map((s) => s.trim())
+      : [],
+    minExperience: safeInt(data.minExperience),
+  });
 
   let embedding = null;
 
@@ -302,7 +307,6 @@ async function createJobsFromCSV(filePath, createdById) {
 
           const headers = Object.keys(rows[0] || {});
           const aiMapping = await getHeaderMapping(headers);
-          const normalizedSkills = normalizeSkills(aiMapped.skills);
 
           const normalizedMapping = {};
 
@@ -339,6 +343,8 @@ async function createJobsFromCSV(filePath, createdById) {
                   aiMapped[target] = row[key];
                 }
               }
+
+              const normalizedSkills = normalizeSkills(aiMapped.skills);
 
               ////////////////////////////////////////////////////
               // FINAL JOB OBJECT

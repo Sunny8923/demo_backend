@@ -1,5 +1,8 @@
 const prisma = require("../../../config/prisma");
-const { getEmbedding } = require("../../../utils/embedding");
+const {
+  getEmbedding,
+  buildCandidateEmbeddingText,
+} = require("../../../utils/embedding");
 
 ////////////////////////////////////////////////////////////
 /// HELPERS
@@ -192,10 +195,13 @@ async function createOrFindCandidate(data, source, extra = {}) {
   /// 🔥 EMBEDDING (ONLY HERE)
   ////////////////////////////////////////////////////////////
 
-  const candidateText = `
-${data.currentDesignation || ""}
-${normalizedSkills || ""}
-`;
+  const candidateText = buildCandidateEmbeddingText({
+    skillsArray: normalizedSkills
+      ? normalizedSkills.split(",").map((s) => s.trim())
+      : [],
+    totalExperience: parseExperience(data.totalExperience),
+    currentRole: data.currentDesignation,
+  });
 
   let embedding = null;
 

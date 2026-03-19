@@ -5,6 +5,7 @@ const unzipper = require("unzipper");
 const crypto = require("crypto");
 
 const pLimit = require("p-limit").default;
+const { uploadToR2 } = require("../../../utils/uploadToR2");
 
 const openai = require("../../../config/openai");
 const prisma = require("../../../config/prisma");
@@ -388,11 +389,13 @@ async function processSingleResume(file, index) {
       };
     }
 
+    const r2Url = await uploadToR2(file);
+
     const result = await candidateService.createOrFindCandidate(
       candidateData,
       "ADMIN_RESUME_UPLOAD",
       {
-        resumeUrl: file.path,
+        resumeUrl: r2Url, // ✅ now real URL
         resumeText: text.slice(0, 2000),
         resumeHash: hash,
       },
