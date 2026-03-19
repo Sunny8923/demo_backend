@@ -13,10 +13,6 @@ const prisma = require("../../../config/prisma");
 const candidateService = require("../services/candidate.service");
 
 const vision = require("@google-cloud/vision");
-const { exec } = require("child_process");
-const util = require("util");
-
-const execPromise = util.promisify(exec);
 
 const limit = pLimit(process.env.AI_CONCURRENCY || 5);
 
@@ -141,45 +137,17 @@ async function parseResume(file) {
 
 async function extractTextWithVision(pdfPath) {
   try {
-    const outputPrefix = pdfPath.replace(".pdf", "");
+    const fileBuffer = fs.readFileSync(pdfPath);
 
-    ////////////////////////////////////////////////////////////
-    /// CONVERT PDF → IMAGES (FIRST 2 PAGES)
-    ////////////////////////////////////////////////////////////
+    const [result] = await visionClient.documentTextDetection({
+      image: {
+        content: fileBuffer.toString("base64"),
+      },
+    });
 
-    await execPromise(`pdftoppm -png -f 1 -l 2 "${pdfPath}" "${outputPrefix}"`);
+    const text = result.fullTextAnnotation?.text || "";
 
-    ////////////////////////////////////////////////////////////
-    /// COLLECT IMAGES
-    ////////////////////////////////////////////////////////////
-
-    const imagePaths = [
-      `${outputPrefix}-1.png`,
-      `${outputPrefix}-2.png`,
-    ].filter((p) => fs.existsSync(p));
-
-    let fullText = "";
-
-    ////////////////////////////////////////////////////////////
-    /// OCR EACH IMAGE
-    ////////////////////////////////////////////////////////////
-
-    for (const imgPath of imagePaths) {
-      const [result] = await visionClient.textDetection(imgPath);
-
-      const detections = result.textAnnotations;
-
-      if (detections && detections.length > 0) {
-        fullText += detections[0].description + "\n";
-      }
-
-      ////////////////////////////////////////////////////////////
-      /// DELETE IMAGE AFTER USE
-      ////////////////////////////////////////////////////////////
-      fs.unlink(imgPath, () => {});
-    }
-
-    return fullText;
+    return text;
   } catch (error) {
     console.error("Vision OCR failed:", error.message);
     return "";
