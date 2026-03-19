@@ -20,7 +20,14 @@ const execPromise = util.promisify(exec);
 
 const limit = pLimit(process.env.AI_CONCURRENCY || 5);
 
-const visionClient = new vision.ImageAnnotatorClient();
+const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+
+// Fix newline issue
+credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
+
+const visionClient = new vision.ImageAnnotatorClient({
+  credentials,
+});
 
 ////////////////////////////////////////////////////////////
 /// HELPERS
