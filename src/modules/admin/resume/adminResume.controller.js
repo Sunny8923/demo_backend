@@ -1,7 +1,38 @@
 const prisma = require("../../../config/prisma");
 const resumeService = require("./adminResume.service");
 const path = require("path");
+const os = require("os");
+const fs = require("fs");
+const axios = require("axios");
+
 const resumeQueue = require("../../../queues/resume.queue");
+const { uploadToR2 } = require("../../../utils/uploadToR2");
+
+////////////////////////////////////////////////////////////
+/// HELPER: DOWNLOAD R2 FILE TO TEMP
+////////////////////////////////////////////////////////////
+
+async function downloadToTempFile(url, fileName) {
+  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${fileName}`);
+
+  const res = await axios.get(url, {
+    responseType: "stream",
+  });
+
+  const writer = fs.createWriteStream(tempPath);
+
+  await new Promise((resolve, reject) => {
+    res.data.pipe(writer);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
+
+  return tempPath;
+}
+
+////////////////////////////////////////////////////////////
+/// MAIN CONTROLLER
+////////////////////////////////////////////////////////////
 
 async function uploadResumes(req, res) {
   try {
@@ -17,24 +48,75 @@ async function uploadResumes(req, res) {
     }
 
     ////////////////////////////////////////////////////////////
-    /// CALCULATE REAL TOTAL (INCLUDING ZIP)
+    /// UPLOAD FILES TO R2 FIRST
+    ////////////////////////////////////////////////////////////
+
+    const uploadedFiles = [];
+
+    for (const file of req.files) {
+      try {
+        const r2Url = await uploadToR2(file);
+
+        ////////////////////////////////////////////////////////////
+        /// ✅ ONLY PUSH IF UPLOAD SUCCESSFUL
+        ////////////////////////////////////////////////////////////
+
+        if (!r2Url) {
+          console.error("Upload failed, skipping:", file.originalname);
+          continue;
+        }
+
+        uploadedFiles.push({
+          originalname: file.originalname,
+          url: r2Url,
+        });
+      } catch (err) {
+        console.error("R2 upload failed:", file.originalname, err.message);
+      }
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// SAFETY CHECK
+    ////////////////////////////////////////////////////////////
+
+    if (uploadedFiles.length === 0) {
+      return res.status(500).json({
+        success: false,
+        message: "All uploads failed",
+      });
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// CALCULATE TOTAL (INCLUDING ZIP)
     ////////////////////////////////////////////////////////////
 
     let total = 0;
 
-    for (const file of req.files) {
+    for (const file of uploadedFiles) {
       const ext = path.extname(file.originalname).toLowerCase();
 
       if (ext === ".zip") {
-        const count = await resumeService.countZipFiles(file.path);
-        total += count;
+        try {
+          const tempZipPath = await downloadToTempFile(
+            file.url,
+            file.originalname,
+          );
+
+          const count = await resumeService.countZipFiles(tempZipPath);
+
+          await fs.promises.unlink(tempZipPath);
+
+          total += count;
+        } catch (err) {
+          console.error("ZIP count failed:", err.message);
+        }
       } else {
         total += 1;
       }
     }
 
     ////////////////////////////////////////////////////////////
-    /// EDGE CASE: EMPTY ZIP OR NO VALID FILES
+    /// EDGE CASE
     ////////////////////////////////////////////////////////////
 
     if (total === 0) {
@@ -67,23 +149,14 @@ async function uploadResumes(req, res) {
     });
 
     ////////////////////////////////////////////////////////////
-    /// PREPARE SAFE FILE DATA (IMPORTANT)
-    ////////////////////////////////////////////////////////////
-
-    const safeFiles = req.files.map((f) => ({
-      originalname: f.originalname,
-      path: f.path,
-    }));
-
-    ////////////////////////////////////////////////////////////
-    /// ADD TO QUEUE (NON-BLOCKING + RETRY)
+    /// ADD TO QUEUE
     ////////////////////////////////////////////////////////////
 
     resumeQueue
       .add(
         "resume-upload",
         {
-          files: safeFiles,
+          files: uploadedFiles,
           jobId: job.id,
           total,
         },

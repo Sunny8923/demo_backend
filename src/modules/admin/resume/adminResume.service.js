@@ -3,6 +3,7 @@ const path = require("path");
 const mammoth = require("mammoth");
 const unzipper = require("unzipper");
 const crypto = require("crypto");
+const axios = require("axios");
 
 const pLimit = require("p-limit").default;
 const { uploadToR2 } = require("../../../utils/uploadToR2");
@@ -12,8 +13,26 @@ const prisma = require("../../../config/prisma");
 
 const candidateService = require("../services/candidate.service");
 const { extractTextFromPDF } = require("../../../utils/visionAsync");
-
 const limit = pLimit(process.env.AI_CONCURRENCY || 5);
+const os = require("os");
+
+async function downloadToTempFile(url, fileName) {
+  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${fileName}`);
+
+  const res = await axios.get(url, {
+    responseType: "stream",
+  });
+
+  const writer = fs.createWriteStream(tempPath);
+
+  await new Promise((resolve, reject) => {
+    res.data.pipe(writer);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
+
+  return tempPath;
+}
 
 ////////////////////////////////////////////////////////////
 /// HELPERS
@@ -136,7 +155,7 @@ async function extractZip(filePath) {
     if (![".pdf", ".docx", ".doc", ".txt"].includes(ext)) continue;
 
     const safeName = entry.path.replace(/[\/\\]/g, "_");
-    const outputPath = "uploads/resumes/" + Date.now() + "-" + safeName;
+    const outputPath = path.join(os.tmpdir(), `${Date.now()}-${safeName}`);
 
     await new Promise((resolve, reject) => {
       entry
@@ -285,38 +304,72 @@ async function withVisionTimeout(promise, ms = 30000) {
 ////////////////////////////////////////////////////////////
 
 async function processSingleResume(file, index) {
+  let tempPath = null;
+
   try {
-    let rawText = await parseResume(file);
+    ////////////////////////////////////////////////////////////
+    /// VALIDATE
+    ////////////////////////////////////////////////////////////
+
+    if (!file.url) {
+      return {
+        row: index + 1,
+        fileName: file.originalname,
+        status: "error",
+        error: "Missing file URL",
+      };
+    }
+
+    ////////////////////////////////////////////////////////////
+    /// DOWNLOAD FROM R2 → TEMP FILE
+    ////////////////////////////////////////////////////////////
+
+    tempPath = await downloadToTempFile(file.url, file.originalname);
+
+    ////////////////////////////////////////////////////////////
+    /// PARSE USING OLD LOGIC (RESTORED ✅)
+    ////////////////////////////////////////////////////////////
+
+    let rawText = await parseResume({
+      originalname: file.originalname,
+      path: tempPath,
+    });
+
     let text = cleanResumeText(rawText);
 
     ////////////////////////////////////////////////////////////
-    /// 🔥 FALLBACK TO GOOGLE VISION (ONLY FOR PDF)
+    /// VISION FALLBACK (UNCHANGED)
     ////////////////////////////////////////////////////////////
 
     const ext = path.extname(file.originalname).toLowerCase();
-
     const wordCount = text ? text.split(/\s+/).length : 0;
-
     const isWeakText = !text || text.length < 500 || wordCount < 50;
 
     if (ext === ".pdf" && isWeakText) {
-      console.log(`⚡ Using Vision Async OCR for: ${file.originalname}`);
-      let visionText = "";
+      console.log(`⚡ Using Vision OCR for: ${file.originalname}`);
 
       try {
-        visionText = await withVisionTimeout(
-          extractTextFromPDF(file.path, file.originalname),
+        const res = await axios.get(file.url, {
+          responseType: "arraybuffer",
+        });
+
+        const buffer = Buffer.from(res.data);
+
+        const visionText = await withVisionTimeout(
+          extractTextFromPDF(buffer, file.originalname),
           30000,
         );
+
+        if (visionText && visionText.length > 200) {
+          text = cleanResumeText(visionText);
+        }
       } catch (err) {
         console.warn("Vision OCR failed:", err.message);
       }
-      if (visionText && visionText.length > 200) {
-        text = cleanResumeText(visionText);
-      }
     }
+
     ////////////////////////////////////////////////////////////
-    /// FINAL VALIDATION
+    /// VALIDATION
     ////////////////////////////////////////////////////////////
 
     if (!text || text.length < 200) {
@@ -327,8 +380,8 @@ async function processSingleResume(file, index) {
         error: "Empty or unreadable resume",
       };
     }
-    const hash = generateHash(text);
 
+    const hash = generateHash(text);
     const basic = extractBasicInfo(text);
 
     if (!basic.email && !basic.phone) {
@@ -340,6 +393,10 @@ async function processSingleResume(file, index) {
       };
     }
 
+    ////////////////////////////////////////////////////////////
+    /// AI PARSING
+    ////////////////////////////////////////////////////////////
+
     let candidateData = await extractCandidateData(text);
 
     if (!candidateData) {
@@ -350,13 +407,15 @@ async function processSingleResume(file, index) {
       };
     }
 
-    const r2Url = await uploadToR2(file);
+    ////////////////////////////////////////////////////////////
+    /// SAVE
+    ////////////////////////////////////////////////////////////
 
     const result = await candidateService.createOrFindCandidate(
       candidateData,
       "ADMIN_RESUME_UPLOAD",
       {
-        resumeUrl: r2Url, // ✅ now real URL
+        resumeUrl: file.url,
         resumeText: text.slice(0, 2000),
         resumeHash: hash,
       },
@@ -384,6 +443,17 @@ async function processSingleResume(file, index) {
       status: "error",
       error: error.message,
     };
+  } finally {
+    ////////////////////////////////////////////////////////////
+    /// CLEANUP TEMP FILE (VERY IMPORTANT)
+    ////////////////////////////////////////////////////////////
+    if (tempPath) {
+      try {
+        await fs.promises.unlink(tempPath);
+      } catch (err) {
+        console.warn("Temp cleanup failed:", tempPath);
+      }
+    }
   }
 }
 
@@ -419,7 +489,17 @@ async function processResumes(files, jobId, job, total) {
       /// ZIP FILE
       ////////////////////////////////////////////////////////////
       if (ext === ".zip") {
-        const extracted = await extractZip(file.path);
+        if (!file.url) {
+          console.error("ZIP missing URL");
+          continue;
+        }
+
+        const tempZipPath = await downloadToTempFile(
+          file.url,
+          file.originalname,
+        );
+
+        const extracted = await extractZip(tempZipPath);
 
         results = await Promise.all(
           extracted.map((f, i) =>
@@ -429,20 +509,32 @@ async function processResumes(files, jobId, job, total) {
                 data: { currentFile: f.originalname },
               });
 
-              return processSingleResume(f, index + i);
+              // upload extracted file to R2
+              const r2Url = await uploadToR2({
+                path: f.path,
+                originalname: f.originalname,
+              });
+
+              return processSingleResume(
+                {
+                  originalname: f.originalname,
+                  url: r2Url,
+                },
+                index + i,
+              );
             }),
           ),
         );
 
-        // ✅ delete extracted files safely
+        // cleanup extracted files
         for (const f of extracted) {
           await safeUnlink(f.path);
         }
 
-        index += extracted.length;
+        // cleanup temp zip
+        await safeUnlink(tempZipPath);
 
-        // ✅ delete zip
-        await safeUnlink(file.path);
+        index += extracted.length;
       }
 
       ////////////////////////////////////////////////////////////
@@ -452,9 +544,6 @@ async function processResumes(files, jobId, job, total) {
         const result = await limit(() => processSingleResume(file, index));
 
         results = [result];
-
-        await safeUnlink(file.path);
-
         index++;
       }
 
