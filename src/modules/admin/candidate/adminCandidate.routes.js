@@ -7,9 +7,20 @@ const authMiddleware = require("../../../middlewares/auth.middleware");
 const requireRole = require("../../../middlewares/requireRole.middleware");
 
 ////////////////////////////////////////////////////////
-// GET CANDIDATES (WITH FILTERS)
+// GET CANDIDATES (LIST)
 ////////////////////////////////////////////////////////
 
 router.get("/", authMiddleware, requireRole("ADMIN"), controller.getCandidates);
+
+////////////////////////////////////////////////////////
+// GET SINGLE CANDIDATE
+////////////////////////////////////////////////////////
+
+router.get(
+  "/:id",
+  authMiddleware,
+  requireRole("ADMIN"),
+  controller.getCandidateById,
+);
 
 module.exports = router;

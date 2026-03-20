@@ -40,6 +40,38 @@ async function getCandidates(req, res) {
   }
 }
 
+////////////////////////////////////////////////////////
+// GET SINGLE CANDIDATE
+////////////////////////////////////////////////////////
+
+async function getCandidateById(req, res) {
+  try {
+    const { id } = req.params;
+
+    const candidate = await candidateService.getCandidateById(id);
+
+    if (!candidate) {
+      return res.status(404).json({
+        success: false,
+        message: "Candidate not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      candidate,
+    });
+  } catch (error) {
+    console.error("Get candidate error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch candidate",
+    });
+  }
+}
+
 module.exports = {
   getCandidates,
+  getCandidateById,
 };

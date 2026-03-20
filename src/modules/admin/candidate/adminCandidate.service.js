@@ -2,7 +2,7 @@ const prisma = require("../../../config/prisma");
 const { getEmbedding, cosineSimilarity } = require("../../../utils/embedding");
 
 ////////////////////////////////////////////////////////
-// GET CANDIDATES WITH SMART + SEMANTIC SEARCH
+// GET CANDIDATES
 ////////////////////////////////////////////////////////
 
 async function getCandidates(filters) {
@@ -17,7 +17,7 @@ async function getCandidates(filters) {
   } = filters;
 
   ////////////////////////////////////////////////////////
-  /// SANITIZE INPUT
+  /// SANITIZE
   ////////////////////////////////////////////////////////
 
   page = Number(page) || 1;
@@ -30,7 +30,7 @@ async function getCandidates(filters) {
   const AND = [];
 
   ////////////////////////////////////////////////////////
-  /// SEARCH FILTER (DB LEVEL)
+  /// SEARCH FILTER
   ////////////////////////////////////////////////////////
 
   if (search && search.trim() !== "") {
@@ -97,14 +97,10 @@ async function getCandidates(filters) {
     });
   }
 
-  ////////////////////////////////////////////////////////
-  /// FINAL WHERE
-  ////////////////////////////////////////////////////////
-
   const where = AND.length > 0 ? { AND } : {};
 
   ////////////////////////////////////////////////////////
-  /// FETCH DATA
+  /// FETCH
   ////////////////////////////////////////////////////////
 
   const [candidates, total] = await Promise.all([
@@ -112,7 +108,9 @@ async function getCandidates(filters) {
       where,
       skip,
       take: limit,
-
+      orderBy: {
+        createdAt: "desc", // ✅ default sorting
+      },
       select: {
         id: true,
         name: true,
@@ -124,8 +122,8 @@ async function getCandidates(filters) {
         currentDesignation: true,
         skills: true,
         skillsArray: true,
-        embedding: true, // 🔥 needed for semantic
         createdAt: true,
+        embedding: true, // internal use only
       },
     }),
 
@@ -133,7 +131,26 @@ async function getCandidates(filters) {
   ]);
 
   ////////////////////////////////////////////////////////
-  /// SEMANTIC SEARCH PREP
+  /// NO SEARCH MODE (🔥 CLEAN)
+  ////////////////////////////////////////////////////////
+
+  const isSearchMode = (search && search.length > 0) || searchSkills.length > 0;
+
+  if (!isSearchMode) {
+    return {
+      candidates: candidates.map((c) => {
+        const { embedding, ...rest } = c;
+        return rest; // ✅ no score fields
+      }),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  ////////////////////////////////////////////////////////
+  /// SEMANTIC PREP
   ////////////////////////////////////////////////////////
 
   let searchEmbedding = null;
@@ -147,25 +164,17 @@ async function getCandidates(filters) {
   }
 
   ////////////////////////////////////////////////////////
-  /// SCORING ENGINE 🔥
+  /// SCORING
   ////////////////////////////////////////////////////////
 
   const scored = candidates.map((c) => {
     let score = 0;
 
-    ////////////////////////////////////////////////////////
-    /// NAME MATCH
-    ////////////////////////////////////////////////////////
+    let matchedSkills = [];
 
     if (search && c.name?.toLowerCase().includes(search.toLowerCase())) {
       score += 20;
     }
-
-    ////////////////////////////////////////////////////////
-    /// SKILL MATCH
-    ////////////////////////////////////////////////////////
-
-    let matchedSkills = [];
 
     if (searchSkills.length > 0) {
       matchedSkills = searchSkills.filter((s) => c.skillsArray?.includes(s));
@@ -173,33 +182,18 @@ async function getCandidates(filters) {
       score += matchedSkills.length * 10;
     }
 
-    ////////////////////////////////////////////////////////
-    /// EXPERIENCE BOOST
-    ////////////////////////////////////////////////////////
-
     if (c.totalExperience) {
       score += Math.min(c.totalExperience, 10);
     }
-
-    ////////////////////////////////////////////////////////
-    /// SEMANTIC MATCH 🔥
-    ////////////////////////////////////////////////////////
 
     let semanticScore = 0;
 
     if (searchEmbedding && c.embedding) {
       try {
         semanticScore = cosineSimilarity(searchEmbedding, c.embedding);
-
         score += semanticScore * 30;
-      } catch (err) {
-        console.error("Semantic error:", err.message);
-      }
+      } catch (err) {}
     }
-
-    ////////////////////////////////////////////////////////
-    /// MATCH %
-    ////////////////////////////////////////////////////////
 
     let matchPercentage = 0;
 
@@ -209,12 +203,10 @@ async function getCandidates(filters) {
       matchPercentage = semanticScore * 100;
     }
 
-    ////////////////////////////////////////////////////////
-    /// RETURN
-    ////////////////////////////////////////////////////////
+    const { embedding, ...rest } = c;
 
     return {
-      ...c,
+      ...rest,
       score: Math.round(score),
       semanticScore: Math.round(semanticScore * 100),
       matchPercentage: Math.round(matchPercentage),
@@ -222,15 +214,7 @@ async function getCandidates(filters) {
     };
   });
 
-  ////////////////////////////////////////////////////////
-  /// SORT
-  ////////////////////////////////////////////////////////
-
   scored.sort((a, b) => b.score - a.score);
-
-  ////////////////////////////////////////////////////////
-  /// RESPONSE
-  ////////////////////////////////////////////////////////
 
   return {
     candidates: scored,
@@ -241,6 +225,30 @@ async function getCandidates(filters) {
   };
 }
 
+////////////////////////////////////////////////////////
+// GET SINGLE CANDIDATE
+////////////////////////////////////////////////////////
+
+async function getCandidateById(id) {
+  return prisma.candidate.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      currentLocation: true,
+      totalExperience: true,
+      currentCompany: true,
+      currentDesignation: true,
+      skills: true,
+      skillsArray: true,
+      createdAt: true,
+    },
+  });
+}
+
 module.exports = {
   getCandidates,
+  getCandidateById,
 };

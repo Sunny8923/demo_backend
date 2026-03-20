@@ -1,7 +1,7 @@
 const fs = require("fs");
 const csv = require("csv-parser");
 const openai = require("../../../config/openai");
-const pLimit = require("p-limit");
+const pLimit = require("p-limit").default;
 
 // ✅ shared candidate service
 const candidateService = require("../services/candidate.service");
