@@ -17,15 +17,32 @@ async function getJobStatus(req, res) {
 
     return res.status(200).json({
       success: true,
-      status: job.status,
-      total: job.total,
-      processed: job.processed,
-      progress: `${job.processed}/${job.total}`,
 
-      created: job.created,
-      duplicate: job.duplicate,
-      skipped: job.skipped,
-      error: job.error,
+      status: job.status,
+      stage: job.status,
+
+      progress: {
+        total: job.total,
+        processed: job.processed,
+        percentage:
+          job.total > 0 ? Math.round((job.processed / job.total) * 100) : 0,
+      },
+
+      stats: {
+        created: job.created,
+        duplicate: job.duplicate,
+        skipped: job.skipped,
+        error: job.error,
+      },
+
+      activity: {
+        currentFile: job.currentFile,
+      },
+
+      summary: {
+        completed: job.status === "completed",
+        remaining: job.total - job.processed,
+      },
 
       results: job.status === "completed" ? job.results : null,
     });

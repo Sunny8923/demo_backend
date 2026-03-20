@@ -11,19 +11,9 @@ const openai = require("../../../config/openai");
 const prisma = require("../../../config/prisma");
 
 const candidateService = require("../services/candidate.service");
-
-const vision = require("@google-cloud/vision");
+const { extractTextFromPDF } = require("../../../utils/visionAsync");
 
 const limit = pLimit(process.env.AI_CONCURRENCY || 5);
-
-const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-
-// Fix newline issue
-credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
-
-const visionClient = new vision.ImageAnnotatorClient({
-  credentials,
-});
 
 ////////////////////////////////////////////////////////////
 /// HELPERS
@@ -33,7 +23,7 @@ function isValidEmail(email) {
   return /\S+@\S+\.\S+/.test(email);
 }
 
-function withTimeout(promise, ms = 20000) {
+function withOpenAITimeout(promise, ms = 20000) {
   return Promise.race([
     promise,
     new Promise((_, reject) =>
@@ -129,23 +119,6 @@ async function parseResume(file) {
   if (ext === ".txt") return parseTXT(file.path);
 
   return "";
-}
-
-////////////////////////////////////////////////////////////
-/// VISION OCR FALLBACK (PDF → IMAGE → TEXT)
-////////////////////////////////////////////////////////////
-
-async function extractTextWithVision(pdfPath) {
-  try {
-    const [result] = await visionClient.documentTextDetection(pdfPath);
-
-    const text = result.fullTextAnnotation?.text || "";
-
-    return text;
-  } catch (error) {
-    console.error("Vision OCR failed:", error.message);
-    return "";
-  }
 }
 
 ////////////////////////////////////////////////////////////
@@ -287,7 +260,7 @@ ${resumeText.slice(0, 12000)}
     ////////////////////////////////////////////////////////////
 
     for (let i = 0; i < 2; i++) {
-      const result = await withTimeout(callOpenAI(prompt), 20000);
+      const result = await withOpenAITimeout(callOpenAI(prompt), 20000);
       if (result) return result;
     }
 
@@ -296,6 +269,15 @@ ${resumeText.slice(0, 12000)}
     console.error("AI parsing failed:", error);
     return null;
   }
+}
+
+async function withVisionTimeout(promise, ms = 30000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Vision timeout")), ms),
+    ),
+  ]);
 }
 
 ////////////////////////////////////////////////////////////
@@ -313,16 +295,26 @@ async function processSingleResume(file, index) {
 
     const ext = path.extname(file.originalname).toLowerCase();
 
-    if (ext === ".pdf" && text.length < 300) {
-      console.log(`⚡ Using Vision OCR for: ${file.originalname}`);
+    const wordCount = text ? text.split(/\s+/).length : 0;
 
-      const visionText = await extractTextWithVision(file.path);
+    const isWeakText = !text || text.length < 500 || wordCount < 50;
 
-      if (visionText && visionText.length > 100) {
+    if (ext === ".pdf" && isWeakText) {
+      console.log(`⚡ Using Vision Async OCR for: ${file.originalname}`);
+      let visionText = "";
+
+      try {
+        visionText = await withVisionTimeout(
+          extractTextFromPDF(file.path, file.originalname),
+          30000,
+        );
+      } catch (err) {
+        console.warn("Vision OCR failed:", err.message);
+      }
+      if (visionText && visionText.length > 200) {
         text = cleanResumeText(visionText);
       }
     }
-
     ////////////////////////////////////////////////////////////
     /// FINAL VALIDATION
     ////////////////////////////////////////////////////////////
@@ -412,6 +404,13 @@ async function processResumes(files, jobId, job, total) {
   let index = 0;
 
   for (const file of files) {
+    await prisma.uploadJob.update({
+      where: { id: jobId },
+      data: {
+        currentFile: file.originalname,
+      },
+    });
+
     const ext = path.extname(file.originalname).toLowerCase();
     let results = [];
 
@@ -424,7 +423,14 @@ async function processResumes(files, jobId, job, total) {
 
         results = await Promise.all(
           extracted.map((f, i) =>
-            limit(() => processSingleResume(f, index + i)),
+            limit(async () => {
+              await prisma.uploadJob.update({
+                where: { id: jobId },
+                data: { currentFile: f.originalname },
+              });
+
+              return processSingleResume(f, index + i);
+            }),
           ),
         );
 
@@ -509,6 +515,7 @@ async function processResumes(files, jobId, job, total) {
     data: {
       status: "completed",
       results: processed,
+      currentFile: "Completed",
     },
   });
 

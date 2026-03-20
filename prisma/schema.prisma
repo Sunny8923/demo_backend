@@ -37,8 +37,8 @@ model Job {
   salaryMax         Int?
   salaryMin         Int?
   skills            String?
-  skillsArray  String[]
-  embedding   Json?
+  skillsArray       String[]
+  embedding         Json?
   applicationsCount Int           @default(0)
   clientContact     String?
   clientEmail       String?
@@ -55,17 +55,18 @@ model Job {
 }
 
 model UploadJob {
-  id        String   @id @default(cuid())
-  status    String
-  total     Int
-  processed Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  created   Int      @default(0)
-  duplicate Int      @default(0)
-  error     Int      @default(0)
-  results   Json?
-  skipped   Int      @default(0)
+  id          String   @id @default(cuid())
+  status      String
+  total       Int
+  processed   Int      @default(0)
+  currentFile String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  created     Int      @default(0)
+  duplicate   Int      @default(0)
+  error       Int      @default(0)
+  results     Json?
+  skipped     Int      @default(0)
 }
 
 model Candidate {
@@ -99,8 +100,8 @@ model Candidate {
   pincode              String?
   preferredLocations   String?
   skills               String?
-  skillsArray  String[]
-  embedding   Json?
+  skillsArray          String[]
+  embedding            Json?
   /// /////////////////////////////////////////////////////////
   /// PROFESSIONAL
   /// /////////////////////////////////////////////////////////
