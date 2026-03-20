@@ -2,6 +2,11 @@ const jobService = require("./job.service");
 const jobJDProcessor = require("./services/job.jd.processor"); // new
 const prisma = require("../../config/prisma");
 const jobMatchingService = require("./services/jobMatching.service");
+const { uploadToR2 } = require("../../utils/uploadToR2");
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 ////////////////////////////////////////////////////////
 // CREATE JOB (ADMIN)
@@ -288,31 +293,62 @@ async function getJobById(req, res) {
 // CSV UPLOAD
 ////////////////////////////////////////////////////////
 
+async function downloadToTempFile(url, fileName) {
+  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${fileName}`);
+
+  const res = await axios.get(url, { responseType: "stream" });
+
+  const writer = fs.createWriteStream(tempPath);
+
+  await new Promise((resolve, reject) => {
+    res.data.pipe(writer);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
+
+  return tempPath;
+}
+
 async function uploadJobsCSV(req, res) {
   try {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-
         message: "CSV file is required",
       });
     }
 
-    const result = await jobService.createJobsFromCSV(
-      req.file.path,
+    //////////////////////////////////////////////////////
+    // UPLOAD TO R2
+    //////////////////////////////////////////////////////
+    const r2Url = await uploadToR2(req.file);
 
+    if (!r2Url) {
+      return res.status(500).json({
+        success: false,
+        message: "CSV upload failed",
+      });
+    }
+
+    //////////////////////////////////////////////////////
+    // DOWNLOAD TO TEMP
+    //////////////////////////////////////////////////////
+    const tempPath = await downloadToTempFile(r2Url, req.file.originalname);
+
+    //////////////////////////////////////////////////////
+    // SAME LOGIC (UNCHANGED)
+    //////////////////////////////////////////////////////
+    const result = await jobService.createJobsFromCSV(
+      tempPath,
       req.user.userId,
     );
 
     return res.json({
       success: result.success,
-
       message: result.success
         ? "CSV uploaded successfully"
         : "CSV upload completed with issues",
-
       summary: result.summary,
-
       errors: result.errors,
     });
   } catch (error) {
@@ -320,12 +356,10 @@ async function uploadJobsCSV(req, res) {
 
     return res.status(500).json({
       success: false,
-
       message: error.message || "CSV upload failed",
     });
   }
 }
-
 ////////////////////////////////////////////////////////
 // PARSE JOB JD (NO DB WRITE)
 ////////////////////////////////////////////////////////

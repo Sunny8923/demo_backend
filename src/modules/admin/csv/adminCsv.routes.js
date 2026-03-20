@@ -8,8 +8,12 @@ const requireRole = require("../../../middlewares/requireRole.middleware");
 
 const multer = require("multer");
 
+////////////////////////////////////////////////////////////
+/// MULTER (MEMORY STORAGE - NO LOCAL DISK)
+////////////////////////////////////////////////////////////
+
 const upload = multer({
-  dest: "uploads/csv/",
+  storage: multer.memoryStorage(), // ✅ FIXED
   fileFilter: (req, file, cb) => {
     if (file.mimetype !== "text/csv" && !file.originalname.endsWith(".csv")) {
       return cb(new Error("Only CSV files allowed"), false);

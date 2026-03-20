@@ -1,26 +1,39 @@
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const mammoth = require("mammoth");
 const unzipper = require("unzipper");
 const pLimit = require("p-limit").default;
+const axios = require("axios");
 
+const { uploadToR2 } = require("../../../utils/uploadToR2");
 const jobAIParser = require("./job.ai.parser");
-
-////////////////////////////////////////////////////////////
-/// CREATE JD DIR
-////////////////////////////////////////////////////////////
-
-const jdDir = "uploads/jds";
-
-if (!fs.existsSync(jdDir)) {
-  fs.mkdirSync(jdDir, { recursive: true });
-}
 
 ////////////////////////////////////////////////////////////
 /// CONFIG
 ////////////////////////////////////////////////////////////
 
 const limit = pLimit(process.env.AI_CONCURRENCY || 5);
+
+////////////////////////////////////////////////////////////
+/// DOWNLOAD R2 → TEMP FILE
+////////////////////////////////////////////////////////////
+
+async function downloadToTempFile(url, fileName) {
+  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${fileName}`);
+
+  const res = await axios.get(url, { responseType: "stream" });
+
+  const writer = fs.createWriteStream(tempPath);
+
+  await new Promise((resolve, reject) => {
+    res.data.pipe(writer);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
+  });
+
+  return tempPath;
+}
 
 ////////////////////////////////////////////////////////////
 /// CLEAN TEXT
@@ -95,7 +108,7 @@ async function parseJDFile(file) {
 }
 
 ////////////////////////////////////////////////////////////
-/// ZIP EXTRACTION
+/// ZIP EXTRACTION (TEMP FILES)
 ////////////////////////////////////////////////////////////
 
 async function extractZip(filePath) {
@@ -108,8 +121,9 @@ async function extractZip(filePath) {
 
     if (![".pdf", ".docx", ".doc", ".txt"].includes(ext)) continue;
 
-    const outputPath =
-      jdDir + "/" + Date.now() + "-" + entry.path.replace(/[\/\\]/g, "_");
+    const safeName = entry.path.replace(/[\/\\]/g, "_");
+
+    const outputPath = path.join(os.tmpdir(), `${Date.now()}-${safeName}`);
 
     await new Promise((resolve, reject) => {
       entry
@@ -137,7 +151,7 @@ async function processSingleJD(file, index) {
     const rawText = await parseJDFile(file);
     const text = cleanText(rawText);
 
-    // delete file after reading
+    // cleanup
     if (fs.existsSync(file.path)) {
       fs.unlinkSync(file.path);
     }
@@ -168,7 +182,7 @@ async function processSingleJD(file, index) {
       status: "parsed",
       data: parsed,
       rawTextPreview: text.slice(0, 2000),
-      fullText: text, // ✅ IMPORTANT
+      fullText: text,
     };
   } catch (error) {
     return {
@@ -191,28 +205,79 @@ async function processJobJDs(files) {
   for (const file of files) {
     const ext = path.extname(file.originalname).toLowerCase();
 
-    if (ext === ".zip") {
-      const extracted = await extractZip(file.path);
+    //////////////////////////////////////////////////////
+    // UPLOAD → R2
+    //////////////////////////////////////////////////////
+    const r2Url = await uploadToR2(file);
 
-      const parsedResults = await Promise.all(
-        extracted.map((f, i) => limit(() => processSingleJD(f, index + i))),
-      );
-
-      results.push(...parsedResults);
-      index += extracted.length;
-
-      if (fs.existsSync(file.path)) {
-        fs.unlinkSync(file.path);
-      }
-    } else {
-      const result = await limit(() => processSingleJD(file, index));
-      results.push(result);
+    if (!r2Url) {
+      results.push({
+        index,
+        fileName: file.originalname,
+        status: "error",
+        error: "R2 upload failed",
+      });
       index++;
+      continue;
     }
+
+    const tempPath = await downloadToTempFile(r2Url, file.originalname);
+
+    try {
+      //////////////////////////////////////////////////////
+      // ZIP FILE
+      //////////////////////////////////////////////////////
+      if (ext === ".zip") {
+        const extracted = await extractZip(tempPath);
+
+        const parsedResults = await Promise.all(
+          extracted.map((f, i) => limit(() => processSingleJD(f, index + i))),
+        );
+
+        results.push(...parsedResults);
+        index += extracted.length;
+
+        // cleanup extracted
+        for (const f of extracted) {
+          try {
+            fs.unlinkSync(f.path);
+          } catch {}
+        }
+      }
+
+      //////////////////////////////////////////////////////
+      // NORMAL FILE
+      //////////////////////////////////////////////////////
+      else {
+        const result = await limit(() =>
+          processSingleJD(
+            {
+              originalname: file.originalname,
+              path: tempPath,
+            },
+            index,
+          ),
+        );
+
+        results.push(result);
+        index++;
+      }
+    } catch (err) {
+      console.error("JD processing error:", err.message);
+    }
+
+    //////////////////////////////////////////////////////
+    // CLEANUP MAIN TEMP FILE
+    //////////////////////////////////////////////////////
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {}
   }
 
   return { results };
 }
+
+////////////////////////////////////////////////////////////
 
 module.exports = {
   processJobJDs,

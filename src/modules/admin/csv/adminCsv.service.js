@@ -340,8 +340,8 @@ async function processCSV(filePath) {
     ////////////////////////////////////////////////////////////
 
     try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      if (filePath) {
+        fs.unlinkSync(filePath); // ✅ works for temp files
       }
     } catch (cleanupErr) {
       console.error("File cleanup failed:", cleanupErr.message);
