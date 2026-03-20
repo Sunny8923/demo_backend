@@ -349,14 +349,8 @@ async function processSingleResume(file, index) {
       console.log(`⚡ Using Vision OCR for: ${file.originalname}`);
 
       try {
-        const res = await axios.get(file.url, {
-          responseType: "arraybuffer",
-        });
-
-        const buffer = Buffer.from(res.data);
-
         const visionText = await withVisionTimeout(
-          extractTextFromPDF(buffer, file.originalname),
+          extractTextFromPDF(tempPath, file.originalname),
           30000,
         );
 
@@ -367,7 +361,6 @@ async function processSingleResume(file, index) {
         console.warn("Vision OCR failed:", err.message);
       }
     }
-
     ////////////////////////////////////////////////////////////
     /// VALIDATION
     ////////////////////////////////////////////////////////////
