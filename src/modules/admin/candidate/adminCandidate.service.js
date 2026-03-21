@@ -109,21 +109,37 @@ async function getCandidates(filters) {
       skip,
       take: limit,
       orderBy: {
-        createdAt: "desc", // ✅ default sorting
+        createdAt: "desc",
       },
       select: {
         id: true,
         name: true,
         email: true,
         phone: true,
+
         currentLocation: true,
+        preferredLocations: true,
+
         totalExperience: true,
+
         currentCompany: true,
         currentDesignation: true,
+        department: true,
+        industry: true,
+
         skills: true,
         skillsArray: true,
+
+        currentSalary: true,
+        expectedSalary: true,
+        noticePeriodDays: true,
+
+        highestQualification: true,
+
+        resumeUrl: true, // 🔥 FIX
+
         createdAt: true,
-        embedding: true, // internal use only
+        embedding: true,
       },
     }),
 
@@ -131,7 +147,7 @@ async function getCandidates(filters) {
   ]);
 
   ////////////////////////////////////////////////////////
-  /// NO SEARCH MODE (🔥 CLEAN)
+  /// NO SEARCH MODE
   ////////////////////////////////////////////////////////
 
   const isSearchMode = (search && search.length > 0) || searchSkills.length > 0;
@@ -139,8 +155,12 @@ async function getCandidates(filters) {
   if (!isSearchMode) {
     return {
       candidates: candidates.map((c) => {
-        const { embedding, ...rest } = c;
-        return rest; // ✅ no score fields
+        const { embedding, resumeUrl, ...rest } = c;
+
+        return {
+          ...rest,
+          resume: resumeUrl, // ✅ clean API
+        };
       }),
       total,
       page,
@@ -169,7 +189,6 @@ async function getCandidates(filters) {
 
   const scored = candidates.map((c) => {
     let score = 0;
-
     let matchedSkills = [];
 
     if (search && c.name?.toLowerCase().includes(search.toLowerCase())) {
@@ -203,10 +222,11 @@ async function getCandidates(filters) {
       matchPercentage = semanticScore * 100;
     }
 
-    const { embedding, ...rest } = c;
+    const { embedding, resumeUrl, ...rest } = c;
 
     return {
       ...rest,
+      resume: resumeUrl, // ✅ clean API
       score: Math.round(score),
       semanticScore: Math.round(semanticScore * 100),
       matchPercentage: Math.round(matchPercentage),
@@ -230,22 +250,51 @@ async function getCandidates(filters) {
 ////////////////////////////////////////////////////////
 
 async function getCandidateById(id) {
-  return prisma.candidate.findUnique({
+  const candidate = await prisma.candidate.findUnique({
     where: { id },
     select: {
       id: true,
       name: true,
       email: true,
       phone: true,
+
       currentLocation: true,
+      preferredLocations: true,
+      hometown: true,
+      pincode: true,
+
       totalExperience: true,
+
       currentCompany: true,
       currentDesignation: true,
+      department: true,
+      industry: true,
+
       skills: true,
       skillsArray: true,
+
+      currentSalary: true,
+      expectedSalary: true,
+      noticePeriodDays: true,
+
+      highestQualification: true,
+
+      resumeUrl: true,
+
+      resumeText: true, // optional
+
       createdAt: true,
     },
   });
+
+  if (!candidate) return null;
+
+  const { resumeUrl, ...rest } = candidate;
+
+  return {
+    ...rest,
+    resume: resumeUrl, // ✅ clean API
+  };
 }
 
 module.exports = {

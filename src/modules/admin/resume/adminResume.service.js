@@ -242,7 +242,14 @@ Return STRICT JSON with the following fields:
   "preferredLocations": string | null,
   "hometown": string | null,
   "pincode": string | null,
-
+  "experience": [
+  {
+    "company": string | null,
+    "role": string | null,
+    "startDate": string | null,
+    "endDate": string | null
+  }
+],
   "totalExperience": number | null,
   "currentCompany": string | null,
   "currentDesignation": string | null,
@@ -265,6 +272,10 @@ Rules:
 - Skills must be comma separated, lowercase, no duplicates
 - Phone must contain only digits
 - If fresher → totalExperience = 0
+- Extract ALL work experiences (ignore education/internships if clearly marked)
+- Dates can be formats like: "Jan 2022", "2022-01", "March 2023", "Present"
+- If endDate is current → use "Present"
+- If no experience found → return empty array []
 
 Known extracted info:
 email: ${basic.email || "null"}

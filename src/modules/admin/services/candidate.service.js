@@ -3,6 +3,10 @@ const {
   getEmbedding,
   buildCandidateEmbeddingText,
 } = require("../../../utils/embedding");
+const {
+  cleanExperience,
+  calculateTotalExperience,
+} = require("../../../utils/experience");
 
 ////////////////////////////////////////////////////////////
 /// HELPERS
@@ -61,6 +65,35 @@ function normalizeSkills(skills) {
     .join(", ");
 }
 
+function resolveTotalExperience(data) {
+  ////////////////////////////////////////////////////////////
+  /// 1. TRY STRUCTURED EXPERIENCE (BEST SOURCE)
+  ////////////////////////////////////////////////////////////
+
+  if (Array.isArray(data.experience) && data.experience.length > 0) {
+    const cleaned = cleanExperience(data.experience);
+    const calculated = calculateTotalExperience(cleaned);
+
+    if (calculated !== null) {
+      return calculated;
+    }
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// 2. FALLBACK → AI VALUE
+  ////////////////////////////////////////////////////////////
+
+  const parsed = parseExperience(data.totalExperience);
+
+  if (parsed !== null) return parsed;
+
+  ////////////////////////////////////////////////////////////
+  /// 3. FINAL FALLBACK
+  ////////////////////////////////////////////////////////////
+
+  return null;
+}
+
 ////////////////////////////////////////////////////////////
 /// MERGE HELPERS
 ////////////////////////////////////////////////////////////
@@ -103,8 +136,7 @@ function buildUpdateData(existing, data, extra) {
     hometown: mergeValues(existing.hometown, data.hometown),
     pincode: mergeValues(existing.pincode, data.pincode),
 
-    totalExperience:
-      existing.totalExperience ?? parseExperience(data.totalExperience),
+    totalExperience: existing.totalExperience ?? resolveTotalExperience(data),
 
     currentCompany: mergeValues(existing.currentCompany, data.currentCompany),
     currentDesignation: mergeValues(
@@ -199,7 +231,7 @@ async function createOrFindCandidate(data, source, extra = {}) {
     skillsArray: normalizedSkills
       ? normalizedSkills.split(",").map((s) => s.trim())
       : [],
-    totalExperience: parseExperience(data.totalExperience),
+    totalExperience: resolveTotalExperience(data),
     currentRole: data.currentDesignation,
   });
 
@@ -224,7 +256,7 @@ async function createOrFindCandidate(data, source, extra = {}) {
       hometown: data.hometown || null,
       pincode: data.pincode || null,
 
-      totalExperience: parseExperience(data.totalExperience),
+      totalExperience: resolveTotalExperience(data),
 
       currentCompany: data.currentCompany || null,
       currentDesignation: data.currentDesignation || null,
