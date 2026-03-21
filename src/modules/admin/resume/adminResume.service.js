@@ -328,6 +328,10 @@ async function processSingleResume(file, index) {
         fileName: file.originalname,
         status: "error",
         error: "Missing file URL",
+
+        name: null,
+        email: null,
+        phone: null,
       };
     }
 
@@ -338,7 +342,7 @@ async function processSingleResume(file, index) {
     tempPath = await downloadToTempFile(file.url, file.originalname);
 
     ////////////////////////////////////////////////////////////
-    /// PARSE USING OLD LOGIC (RESTORED ✅)
+    /// PARSE
     ////////////////////////////////////////////////////////////
 
     let rawText = await parseResume({
@@ -349,7 +353,7 @@ async function processSingleResume(file, index) {
     let text = cleanResumeText(rawText);
 
     ////////////////////////////////////////////////////////////
-    /// VISION FALLBACK (UNCHANGED)
+    /// VISION FALLBACK
     ////////////////////////////////////////////////////////////
 
     const ext = path.extname(file.originalname).toLowerCase();
@@ -372,6 +376,7 @@ async function processSingleResume(file, index) {
         console.warn("Vision OCR failed:", err.message);
       }
     }
+
     ////////////////////////////////////////////////////////////
     /// VALIDATION
     ////////////////////////////////////////////////////////////
@@ -382,6 +387,10 @@ async function processSingleResume(file, index) {
         fileName: file.originalname,
         status: "error",
         error: "Empty or unreadable resume",
+
+        name: null,
+        email: null,
+        phone: null,
       };
     }
 
@@ -394,6 +403,10 @@ async function processSingleResume(file, index) {
         fileName: file.originalname,
         status: "skipped",
         reason: "No contact info",
+
+        name: null,
+        email: basic.email || null,
+        phone: basic.phone || null,
       };
     }
 
@@ -431,14 +444,35 @@ async function processSingleResume(file, index) {
         fileName: file.originalname,
         status: "skipped",
         reason: "Invalid candidate",
+
+        name: candidateData?.name || null,
+        email: candidateData?.email || basic.email || null,
+        phone: candidateData?.phone || basic.phone || null,
       };
     }
+
+    ////////////////////////////////////////////////////////////
+    /// FINAL SUCCESS RESPONSE
+    ////////////////////////////////////////////////////////////
+
+    const candidate = result.candidate;
 
     return {
       row: index + 1,
       fileName: file.originalname,
       status: result.isNew ? "created" : "duplicate",
-      candidateId: result.candidate.id,
+      candidateId: candidate.id,
+
+      // ✅ BASIC INFO (IMPORTANT)
+      name: candidate.name || candidateData?.name || null,
+      email: candidate.email || candidateData?.email || basic.email || null,
+      phone: candidate.phone || candidateData?.phone || basic.phone || null,
+
+      // 🔥 OPTIONAL ENHANCEMENTS (VERY USEFUL FOR UI)
+      experience: candidate.totalExperience ?? null,
+      currentCompany: candidate.currentCompany ?? null,
+      currentDesignation: candidate.currentDesignation ?? null,
+      skills: candidate.skills ?? null,
     };
   } catch (error) {
     return {
@@ -446,11 +480,16 @@ async function processSingleResume(file, index) {
       fileName: file.originalname,
       status: "error",
       error: error.message,
+
+      name: null,
+      email: null,
+      phone: null,
     };
   } finally {
     ////////////////////////////////////////////////////////////
-    /// CLEANUP TEMP FILE (VERY IMPORTANT)
+    /// CLEANUP TEMP FILE
     ////////////////////////////////////////////////////////////
+
     if (tempPath) {
       try {
         await fs.promises.unlink(tempPath);

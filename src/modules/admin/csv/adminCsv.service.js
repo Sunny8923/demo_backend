@@ -224,7 +224,9 @@ async function processCSV(filePath) {
       try {
         let mapped = {};
 
-        ////////////////// AI //////////////////
+        ////////////////////////////////////////////////////////////
+        /// AI MAPPING
+        ////////////////////////////////////////////////////////////
 
         if (Object.keys(normalizedMapping).length > 0) {
           for (const key of headers) {
@@ -236,7 +238,9 @@ async function processCSV(filePath) {
           }
         }
 
-        ////////////////// FALLBACK //////////////////
+        ////////////////////////////////////////////////////////////
+        /// FALLBACK MAPPING
+        ////////////////////////////////////////////////////////////
 
         const fallback = mapRow(row);
 
@@ -244,7 +248,9 @@ async function processCSV(filePath) {
           if (!mapped[key]) mapped[key] = fallback[key];
         }
 
-        ////////////////// CLEAN //////////////////
+        ////////////////////////////////////////////////////////////
+        /// CLEAN DATA
+        ////////////////////////////////////////////////////////////
 
         Object.keys(mapped).forEach((k) => {
           mapped[k] = mapped[k]?.toString().trim() || null;
@@ -256,7 +262,9 @@ async function processCSV(filePath) {
 
         const phone = normalizePhone(mapped.phone) || undefined;
 
-        ////////////////// DUP CHECK //////////////////
+        ////////////////////////////////////////////////////////////
+        /// DUPLICATE CHECK (WITHIN CSV)
+        ////////////////////////////////////////////////////////////
 
         const uniqueKey = email || phone;
 
@@ -266,22 +274,34 @@ async function processCSV(filePath) {
               row: i + 1,
               status: "duplicate",
               reason: "Duplicate in CSV",
+
+              name: mapped.name || null,
+              email: email || null,
+              phone: phone || null,
             };
           }
           seen.add(uniqueKey);
         }
 
-        ////////////////// VALIDATION //////////////////
+        ////////////////////////////////////////////////////////////
+        /// VALIDATION
+        ////////////////////////////////////////////////////////////
 
         if (!email && !phone) {
           return {
             row: i + 1,
             status: "skipped",
             reason: "No email/phone",
+
+            name: mapped.name || null,
+            email: null,
+            phone: null,
           };
         }
 
-        ////////////////// CREATE //////////////////
+        ////////////////////////////////////////////////////////////
+        /// CREATE / FIND CANDIDATE
+        ////////////////////////////////////////////////////////////
 
         const result = await candidateService.createOrFindCandidate(
           mapped,
@@ -293,24 +313,49 @@ async function processCSV(filePath) {
             row: i + 1,
             status: "skipped",
             reason: "Invalid candidate",
+
+            name: mapped.name || null,
+            email: email || null,
+            phone: phone || null,
           };
         }
+
+        ////////////////////////////////////////////////////////////
+        /// SUCCESS RESPONSE
+        ////////////////////////////////////////////////////////////
+
+        const candidate = result.candidate;
 
         return {
           row: i + 1,
           status: result.isNew ? "created" : "duplicate",
-          candidateId: result.candidate.id,
+          candidateId: candidate.id,
+
+          // ✅ BASIC INFO (IMPORTANT)
+          name: candidate.name || mapped.name || null,
+          email: candidate.email || email || null,
+          phone: candidate.phone || phone || null,
+
+          // 🔥 OPTIONAL FIELDS (UI GOLD)
+          experience: candidate.totalExperience ?? null,
+          currentCompany: candidate.currentCompany ?? null,
+          currentDesignation: candidate.currentDesignation ?? null,
+          skills: candidate.skills ?? null,
         };
       } catch (err) {
         return {
           row: i + 1,
           status: "error",
           error: err.message,
-          data: row,
+
+          name: null,
+          email: null,
+          phone: null,
+
+          data: row, // keep for debugging
         };
       }
     }
-
     ////////////////////////////////////////////////////////////
     /// PROCESS ALL ROWS
     ////////////////////////////////////////////////////////////
