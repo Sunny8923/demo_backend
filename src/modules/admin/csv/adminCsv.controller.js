@@ -6,29 +6,6 @@ const os = require("os");
 const path = require("path");
 const fs = require("fs");
 const axios = require("axios");
-
-////////////////////////////////////////////////////////////
-/// DOWNLOAD R2 → TEMP FILE
-////////////////////////////////////////////////////////////
-
-async function downloadToTempFile(url, fileName) {
-  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${fileName}`);
-
-  const res = await axios.get(url, {
-    responseType: "stream",
-  });
-
-  const writer = fs.createWriteStream(tempPath);
-
-  await new Promise((resolve, reject) => {
-    res.data.pipe(writer);
-    writer.on("finish", resolve);
-    writer.on("error", reject);
-  });
-
-  return tempPath;
-}
-
 ////////////////////////////////////////////////////////////
 /// MAIN CONTROLLER
 ////////////////////////////////////////////////////////////
@@ -63,13 +40,10 @@ async function uploadCSV(req, res) {
     /// DOWNLOAD TO TEMP
     ////////////////////////////////////////////////////////////
 
-    const tempPath = await downloadToTempFile(r2Url, req.file.originalname);
-
-    ////////////////////////////////////////////////////////////
-    /// PROCESS CSV (UNCHANGED LOGIC)
-    ////////////////////////////////////////////////////////////
-
-    const { summary, results } = await csvService.processCSV(tempPath);
+    const { summary, results } = await csvService.processCSVBuffer(
+      req.file.buffer,
+      req.file.originalname,
+    );
 
     return res.status(200).json({
       success: true,

@@ -1,7 +1,8 @@
-const fs = require("fs");
 const csv = require("csv-parser");
 const openai = require("../../../config/openai");
 const pLimit = require("p-limit").default;
+const XLSX = require("xlsx");
+const stream = require("stream");
 
 // ✅ shared candidate service
 const candidateService = require("../services/candidate.service");
@@ -18,12 +19,10 @@ const STANDARD_FIELDS = [
   "name",
   "email",
   "phone",
-
   "currentLocation",
   "preferredLocations",
   "hometown",
   "pincode",
-
   "totalExperience",
   "currentCompany",
   "currentDesignation",
@@ -33,9 +32,7 @@ const STANDARD_FIELDS = [
   "currentSalary",
   "expectedSalary",
   "noticePeriodDays",
-
   "highestQualification",
-
   "resumeUrl",
 ];
 
@@ -53,7 +50,7 @@ function generateHeaderKey(headers) {
 }
 
 ////////////////////////////////////////////////////////////
-/// AI HEADER MAPPING
+/// AI HEADER MAPPING (WITH TIMEOUT SAFETY)
 ////////////////////////////////////////////////////////////
 
 async function getHeaderMapping(headers) {
@@ -65,8 +62,6 @@ async function getHeaderMapping(headers) {
 
   try {
     const prompt = `
-You are an expert ATS parser.
-
 Map CSV headers to these fields only:
 ${STANDARD_FIELDS.join(", ")}
 
@@ -79,15 +74,20 @@ Headers:
 ${JSON.stringify(headers)}
 `;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "You map CSV headers." },
-        { role: "user", content: prompt },
-      ],
-    });
+    const completion = await Promise.race([
+      openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You map CSV headers." },
+          { role: "user", content: prompt },
+        ],
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("AI timeout")), 2000),
+      ),
+    ]);
 
     const mapping = JSON.parse(completion.choices[0].message.content);
 
@@ -95,46 +95,35 @@ ${JSON.stringify(headers)}
 
     return mapping;
   } catch (error) {
-    console.error("AI mapping failed:", error);
+    console.error("AI mapping failed:", error.message);
     return null;
   }
 }
 
 ////////////////////////////////////////////////////////////
-/// FALLBACK MAP
+/// FALLBACK MAP (UNCHANGED)
 ////////////////////////////////////////////////////////////
 
 const FIELD_MAP = {
   name: ["name", "full_name", "candidate_name"],
   email: ["email", "email_id"],
   phone: ["phone", "mobile", "contact"],
-
   currentLocation: ["location", "city"],
   preferredLocations: ["preferred_location"],
   hometown: ["hometown"],
   pincode: ["pincode", "zip"],
-
   totalExperience: ["experience", "exp"],
   currentCompany: ["company"],
   currentDesignation: ["designation", "role"],
   department: ["department"],
   industry: ["industry"],
-
   skills: ["skills", "skillset"],
-
   currentSalary: ["ctc"],
   expectedSalary: ["expected_ctc"],
-
   noticePeriodDays: ["notice_period"],
-
   highestQualification: ["education", "degree"],
-
   resumeUrl: ["resume"],
 };
-
-////////////////////////////////////////////////////////////
-/// HELPERS
-////////////////////////////////////////////////////////////
 
 function normalizeKey(key) {
   return key.toLowerCase().replace(/\s+/g, "_").trim();
@@ -169,231 +158,216 @@ function normalizePhone(phone) {
 }
 
 ////////////////////////////////////////////////////////////
-/// PROCESS CSV
+/// FILE PARSERS
 ////////////////////////////////////////////////////////////
 
-async function processCSV(filePath) {
+async function parseCSVBuffer(buffer) {
   const results = [];
 
-  try {
-    ////////////////////////////////////////////////////////////
-    /// READ CSV
-    ////////////////////////////////////////////////////////////
+  const readable = new stream.Readable();
+  readable._read = () => {};
+  readable.push(buffer);
+  readable.push(null);
 
-    await new Promise((resolve, reject) => {
-      fs.createReadStream(filePath)
-        .pipe(csv())
-        .on("data", (row) => results.push(row))
-        .on("end", resolve)
-        .on("error", reject);
-    });
+  return new Promise((resolve, reject) => {
+    readable
+      .pipe(csv())
+      .on("data", (row) => results.push(row))
+      .on("end", () => resolve(results))
+      .on("error", reject);
+  });
+}
 
-    if (results.length === 0) {
-      return { summary: {}, results: [] };
+function parseExcelBuffer(buffer) {
+  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(sheet);
+}
+
+////////////////////////////////////////////////////////////
+/// MAIN FUNCTION (BUFFER BASED)
+////////////////////////////////////////////////////////////
+
+async function processCSVBuffer(fileBuffer, fileName = "") {
+  let results = [];
+
+  ////////////////////////////////////////////////////////////
+  /// PARSE FILE
+  ////////////////////////////////////////////////////////////
+
+  if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
+    results = parseExcelBuffer(fileBuffer);
+  } else {
+    results = await parseCSVBuffer(fileBuffer);
+  }
+
+  if (results.length === 0) {
+    return { summary: {}, results: [] };
+  }
+
+  const headers = Object.keys(results[0]).map((h) => h.trim());
+
+  ////////////////////////////////////////////////////////////
+  /// AI MAPPING
+  ////////////////////////////////////////////////////////////
+
+  const aiMapping = await getHeaderMapping(headers);
+
+  const normalizedMapping = {};
+
+  if (aiMapping) {
+    for (const key in aiMapping) {
+      normalizedMapping[normalizeHeaderKey(key)] = aiMapping[key];
     }
+  }
 
-    const headers = Object.keys(results[0]).map((h) => h.trim());
+  ////////////////////////////////////////////////////////////
+  /// DUPLICATE TRACKING
+  ////////////////////////////////////////////////////////////
 
-    ////////////////////////////////////////////////////////////
-    /// AI MAPPING
-    ////////////////////////////////////////////////////////////
+  const seen = new Set();
 
-    const aiMapping = await getHeaderMapping(headers);
+  ////////////////////////////////////////////////////////////
+  /// CONCURRENCY (SAFE FOR LARGE FILES)
+  ////////////////////////////////////////////////////////////
 
-    const normalizedMapping = {};
+  const limit = pLimit(5);
 
-    if (aiMapping) {
-      for (const key in aiMapping) {
-        normalizedMapping[normalizeHeaderKey(key)] = aiMapping[key];
+  async function processRow(row, i) {
+    try {
+      let mapped = {};
+
+      ////////////////////////////////////////////////////////////
+      /// AI MAPPING
+      ////////////////////////////////////////////////////////////
+
+      if (Object.keys(normalizedMapping).length > 0) {
+        for (const key of headers) {
+          const target = normalizedMapping[normalizeHeaderKey(key)];
+
+          if (target && STANDARD_FIELDS.includes(target)) {
+            mapped[target] = row[key];
+          }
+        }
       }
-    }
 
-    ////////////////////////////////////////////////////////////
-    /// DUPLICATE TRACKING
-    ////////////////////////////////////////////////////////////
+      ////////////////////////////////////////////////////////////
+      /// FALLBACK
+      ////////////////////////////////////////////////////////////
 
-    const seen = new Set();
+      const fallback = mapRow(row);
+      for (const key in fallback) {
+        if (!mapped[key]) mapped[key] = fallback[key];
+      }
 
-    ////////////////////////////////////////////////////////////
-    /// CONCURRENCY CONTROL
-    ////////////////////////////////////////////////////////////
+      ////////////////////////////////////////////////////////////
+      /// CLEAN
+      ////////////////////////////////////////////////////////////
 
-    const limit = pLimit(10);
+      Object.keys(mapped).forEach((k) => {
+        mapped[k] = mapped[k]?.toString().trim() || null;
+      });
 
-    async function processRow(row, i) {
-      try {
-        let mapped = {};
+      const email = isValidEmail(mapped.email)
+        ? mapped.email.toLowerCase()
+        : undefined;
 
-        ////////////////////////////////////////////////////////////
-        /// AI MAPPING
-        ////////////////////////////////////////////////////////////
+      const phone = normalizePhone(mapped.phone) || undefined;
 
-        if (Object.keys(normalizedMapping).length > 0) {
-          for (const key of headers) {
-            const target = normalizedMapping[normalizeHeaderKey(key)];
+      ////////////////////////////////////////////////////////////
+      /// DUPLICATE (CSV)
+      ////////////////////////////////////////////////////////////
 
-            if (target && STANDARD_FIELDS.includes(target)) {
-              mapped[target] = row[key];
-            }
-          }
-        }
+      const uniqueKey = email || phone;
 
-        ////////////////////////////////////////////////////////////
-        /// FALLBACK MAPPING
-        ////////////////////////////////////////////////////////////
-
-        const fallback = mapRow(row);
-
-        for (const key in fallback) {
-          if (!mapped[key]) mapped[key] = fallback[key];
-        }
-
-        ////////////////////////////////////////////////////////////
-        /// CLEAN DATA
-        ////////////////////////////////////////////////////////////
-
-        Object.keys(mapped).forEach((k) => {
-          mapped[k] = mapped[k]?.toString().trim() || null;
-        });
-
-        const email = isValidEmail(mapped.email)
-          ? mapped.email.toLowerCase()
-          : undefined;
-
-        const phone = normalizePhone(mapped.phone) || undefined;
-
-        ////////////////////////////////////////////////////////////
-        /// DUPLICATE CHECK (WITHIN CSV)
-        ////////////////////////////////////////////////////////////
-
-        const uniqueKey = email || phone;
-
-        if (uniqueKey) {
-          if (seen.has(uniqueKey)) {
-            return {
-              row: i + 1,
-              status: "duplicate",
-              reason: "Duplicate in CSV",
-
-              name: mapped.name || null,
-              email: email || null,
-              phone: phone || null,
-            };
-          }
-          seen.add(uniqueKey);
-        }
-
-        ////////////////////////////////////////////////////////////
-        /// VALIDATION
-        ////////////////////////////////////////////////////////////
-
-        if (!email && !phone) {
+      if (uniqueKey) {
+        if (seen.has(uniqueKey)) {
           return {
             row: i + 1,
-            status: "skipped",
-            reason: "No email/phone",
-
-            name: mapped.name || null,
-            email: null,
-            phone: null,
-          };
-        }
-
-        ////////////////////////////////////////////////////////////
-        /// CREATE / FIND CANDIDATE
-        ////////////////////////////////////////////////////////////
-
-        const result = await candidateService.createOrFindCandidate(
-          mapped,
-          "ADMIN_CSV_UPLOAD",
-        );
-
-        if (!result) {
-          return {
-            row: i + 1,
-            status: "skipped",
-            reason: "Invalid candidate",
-
+            status: "duplicate_csv",
             name: mapped.name || null,
             email: email || null,
             phone: phone || null,
           };
         }
+        seen.add(uniqueKey);
+      }
 
-        ////////////////////////////////////////////////////////////
-        /// SUCCESS RESPONSE
-        ////////////////////////////////////////////////////////////
+      ////////////////////////////////////////////////////////////
+      /// VALIDATION
+      ////////////////////////////////////////////////////////////
 
-        const candidate = result.candidate;
-
+      if (!email && !phone) {
         return {
           row: i + 1,
-          status: result.isNew ? "created" : "duplicate",
-          candidateId: candidate.id,
-
-          // ✅ BASIC INFO (IMPORTANT)
-          name: candidate.name || mapped.name || null,
-          email: candidate.email || email || null,
-          phone: candidate.phone || phone || null,
-
-          // 🔥 OPTIONAL FIELDS (UI GOLD)
-          experience: candidate.totalExperience ?? null,
-          currentCompany: candidate.currentCompany ?? null,
-          currentDesignation: candidate.currentDesignation ?? null,
-          skills: candidate.skills ?? null,
+          status: "skipped",
+          reason: "No email/phone",
         };
-      } catch (err) {
+      }
+
+      ////////////////////////////////////////////////////////////
+      /// DB CALL
+      ////////////////////////////////////////////////////////////
+
+      const result = await candidateService.createOrFindCandidate(
+        mapped,
+        "ADMIN_CSV_UPLOAD",
+      );
+
+      if (!result) {
         return {
           row: i + 1,
-          status: "error",
-          error: err.message,
-
-          name: null,
-          email: null,
-          phone: null,
-
-          data: row, // keep for debugging
+          status: "skipped",
+          reason: "Invalid candidate",
         };
       }
-    }
-    ////////////////////////////////////////////////////////////
-    /// PROCESS ALL ROWS
-    ////////////////////////////////////////////////////////////
 
-    const processed = await Promise.all(
-      results.map((row, i) => limit(() => processRow(row, i))),
-    );
+      const candidate = result.candidate;
 
-    ////////////////////////////////////////////////////////////
-    /// SUMMARY
-    ////////////////////////////////////////////////////////////
-
-    const summary = {
-      total: processed.length,
-      created: processed.filter((r) => r.status === "created").length,
-      duplicate: processed.filter((r) => r.status === "duplicate").length,
-      skipped: processed.filter((r) => r.status === "skipped").length,
-      error: processed.filter((r) => r.status === "error").length,
-    };
-
-    return { summary, results: processed };
-  } catch (err) {
-    throw err;
-  } finally {
-    ////////////////////////////////////////////////////////////
-    /// CLEANUP (SAFE)
-    ////////////////////////////////////////////////////////////
-
-    try {
-      if (filePath) {
-        fs.unlinkSync(filePath); // ✅ works for temp files
-      }
-    } catch (cleanupErr) {
-      console.error("File cleanup failed:", cleanupErr.message);
+      return {
+        row: i + 1,
+        status: result.isNew ? "created" : "duplicate_db",
+        candidateId: candidate.id,
+        name: candidate.name || mapped.name || null,
+        email: candidate.email || email || null,
+        phone: candidate.phone || phone || null,
+      };
+    } catch (err) {
+      return {
+        row: i + 1,
+        status: "error",
+        error: err.message,
+      };
     }
   }
+
+  ////////////////////////////////////////////////////////////
+  /// PROCESS (SAFE FOR LARGE FILES)
+  ////////////////////////////////////////////////////////////
+
+  const processed = [];
+
+  for (let i = 0; i < results.length; i++) {
+    processed.push(await limit(() => processRow(results[i], i)));
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// SUMMARY
+  ////////////////////////////////////////////////////////////
+
+  const summary = {
+    total: processed.length,
+    created: processed.filter((r) => r.status === "created").length,
+    duplicate: processed.filter(
+      (r) => r.status === "duplicate_db" || r.status === "duplicate_csv",
+    ).length,
+    skipped: processed.filter((r) => r.status === "skipped").length,
+    error: processed.filter((r) => r.status === "error").length,
+  };
+
+  return { summary, results: processed };
 }
 
 module.exports = {
-  processCSV,
+  processCSVBuffer,
 };
