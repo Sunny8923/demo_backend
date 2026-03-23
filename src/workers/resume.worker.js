@@ -20,7 +20,7 @@ const worker = new Worker(
     ////////////////////////////////////////////////////////////
     /// ✅ RESUME JOB (UNCHANGED)
     ////////////////////////////////////////////////////////////
-    if (job.name === "resumeUpload") {
+    if (job.name === "resume-upload") {
       const { files, jobId, total } = job.data;
 
       return await resumeService.processResumes(files, jobId, job, total);
