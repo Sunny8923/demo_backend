@@ -106,27 +106,52 @@ ${JSON.stringify(headers)}
 
 const FIELD_MAP = {
   name: ["name", "full_name", "candidate_name"],
-  email: ["email", "email_id"],
-  phone: ["phone", "mobile", "contact"],
-  currentLocation: ["location", "city"],
-  preferredLocations: ["preferred_location"],
-  hometown: ["hometown"],
-  pincode: ["pincode", "zip"],
-  totalExperience: ["experience", "exp"],
-  currentCompany: ["company"],
-  currentDesignation: ["designation", "role"],
+
+  email: ["email", "email_id", "emailid"],
+
+  phone: ["phone", "mobile", "contact", "phone_number"],
+
+  currentLocation: ["location", "city", "current_location"],
+
+  preferredLocations: ["preferred_location", "preferred_locations"],
+
+  hometown: ["hometown", "home_town", "home_town_city"],
+
+  pincode: ["pincode", "zip", "pin_code"],
+
+  totalExperience: ["experience", "exp", "total_experience"],
+
+  currentCompany: ["company", "curr_company_name"],
+
+  currentDesignation: ["designation", "role", "curr_company_designation"],
+
   department: ["department"],
+
   industry: ["industry"],
-  skills: ["skills", "skillset"],
-  currentSalary: ["ctc"],
-  expectedSalary: ["expected_ctc"],
-  noticePeriodDays: ["notice_period"],
+
+  skills: ["skills", "skillset", "key_skills"],
+
+  currentSalary: ["ctc", "salary", "annual_salary"],
+
+  expectedSalary: ["expected_ctc", "expected_salary"],
+
+  noticePeriodDays: [
+    "notice_period",
+    "availability_to_join",
+    "notice_period_availability_to_join",
+  ],
+
   highestQualification: ["education", "degree"],
+
   resumeUrl: ["resume"],
 };
 
 function normalizeKey(key) {
-  return key.toLowerCase().replace(/\s+/g, "_").trim();
+  return key
+    .toLowerCase()
+    .replace(/[^\w]/g, "_") // remove special chars like /
+    .replace(/_+/g, "_") // collapse multiple _
+    .trim();
 }
 
 function mapRow(row) {
@@ -238,26 +263,28 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
       let mapped = {};
 
       ////////////////////////////////////////////////////////////
-      /// AI MAPPING
+      /// ✅ 1. FALLBACK FIRST (PRIMARY)
+      ////////////////////////////////////////////////////////////
+
+      const fallback = mapRow(row);
+      mapped = { ...fallback };
+
+      ////////////////////////////////////////////////////////////
+      /// ✅ 2. AI MAPPING (FILL GAPS ONLY)
       ////////////////////////////////////////////////////////////
 
       if (Object.keys(normalizedMapping).length > 0) {
         for (const key of headers) {
           const target = normalizedMapping[normalizeHeaderKey(key)];
 
-          if (target && STANDARD_FIELDS.includes(target)) {
+          if (
+            target &&
+            STANDARD_FIELDS.includes(target) &&
+            !mapped[target] // 👈 don't overwrite fallback
+          ) {
             mapped[target] = row[key];
           }
         }
-      }
-
-      ////////////////////////////////////////////////////////////
-      /// FALLBACK
-      ////////////////////////////////////////////////////////////
-
-      const fallback = mapRow(row);
-      for (const key in fallback) {
-        if (!mapped[key]) mapped[key] = fallback[key];
       }
 
       ////////////////////////////////////////////////////////////
