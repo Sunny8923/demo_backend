@@ -232,9 +232,23 @@ async function processFile(file) {
       ////////////////////////////////////////////////////////////
 
       Object.keys(mapped).forEach((k) => {
-        mapped[k] = mapped[k]?.toString().trim() || null;
+        const val = mapped[k];
+
+        if (val === undefined || val === null) {
+          delete mapped[k];
+          return;
+        }
+
+        const trimmed = val.toString().trim();
+
+        if (trimmed === "") {
+          delete mapped[k]; // 🔥 remove empty fields
+        } else {
+          mapped[k] = trimmed;
+        }
       });
 
+      console.log("FINAL MAPPED:", mapped);
       const email = isValidEmail(mapped.email)
         ? mapped.email.toLowerCase()
         : undefined;
