@@ -50,7 +50,7 @@ function generateHeaderKey(headers) {
 }
 
 ////////////////////////////////////////////////////////////
-/// AI HEADER MAPPING (WITH TIMEOUT SAFETY)
+/// AI HEADER MAPPING (UNCHANGED)
 ////////////////////////////////////////////////////////////
 
 async function getHeaderMapping(headers) {
@@ -101,57 +101,36 @@ ${JSON.stringify(headers)}
 }
 
 ////////////////////////////////////////////////////////////
-/// FALLBACK MAP (UNCHANGED)
+/// FIELD MAP (UNCHANGED - YOUR VERSION)
 ////////////////////////////////////////////////////////////
 
 const FIELD_MAP = {
   name: ["name", "full_name", "candidate_name"],
-
   email: ["email", "email_id", "emailid"],
-
   phone: ["phone", "mobile", "contact", "phone_number"],
-
   currentLocation: ["location", "city", "current_location"],
-
   preferredLocations: ["preferred_location", "preferred_locations"],
-
   hometown: ["hometown", "home_town", "home_town_city"],
-
   pincode: ["pincode", "zip", "pin_code"],
-
   totalExperience: ["experience", "exp", "total_experience"],
-
   currentCompany: ["company", "curr_company_name"],
-
   currentDesignation: ["designation", "role", "curr_company_designation"],
-
   department: ["department"],
-
   industry: ["industry"],
-
   skills: ["skills", "skillset", "key_skills"],
-
   currentSalary: ["ctc", "salary", "annual_salary"],
-
   expectedSalary: ["expected_ctc", "expected_salary"],
-
   noticePeriodDays: [
     "notice_period",
     "availability_to_join",
     "notice_period_availability_to_join",
   ],
-
   highestQualification: ["education", "degree"],
-
   resumeUrl: ["resume"],
 };
 
 function normalizeKey(key) {
-  return key
-    .toLowerCase()
-    .replace(/[^\w]/g, "_") // remove special chars like /
-    .replace(/_+/g, "_") // collapse multiple _
-    .trim();
+  return key.toLowerCase().replace(/[^\w]/g, "_").replace(/_+/g, "_").trim();
 }
 
 function mapRow(row) {
@@ -210,15 +189,11 @@ function parseExcelBuffer(buffer) {
 }
 
 ////////////////////////////////////////////////////////////
-/// MAIN FUNCTION (BUFFER BASED)
+/// MAIN FUNCTION
 ////////////////////////////////////////////////////////////
 
 async function processCSVBuffer(fileBuffer, fileName = "") {
   let results = [];
-
-  ////////////////////////////////////////////////////////////
-  /// PARSE FILE
-  ////////////////////////////////////////////////////////////
 
   if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
     results = parseExcelBuffer(fileBuffer);
@@ -233,12 +208,21 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
   const headers = Object.keys(results[0]).map((h) => h.trim());
 
   ////////////////////////////////////////////////////////////
-  /// AI MAPPING
+  /// AI (NON-BLOCKING + FAST FALLBACK)
   ////////////////////////////////////////////////////////////
 
-  const aiMapping = await getHeaderMapping(headers);
+  let normalizedMapping = {};
 
-  const normalizedMapping = {};
+  let aiMapping = null;
+
+  try {
+    aiMapping = await Promise.race([
+      getHeaderMapping(headers),
+      new Promise((resolve) => setTimeout(() => resolve(null), 500)), // ⚡ max 500ms wait
+    ]);
+  } catch (e) {
+    aiMapping = null;
+  }
 
   if (aiMapping) {
     for (const key in aiMapping) {
@@ -253,35 +237,31 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
   const seen = new Set();
 
   ////////////////////////////////////////////////////////////
-  /// CONCURRENCY (SAFE FOR LARGE FILES)
+  /// ⚡ INCREASED CONCURRENCY
   ////////////////////////////////////////////////////////////
 
-  const limit = pLimit(5);
+  const limit = pLimit(20);
 
   async function processRow(row, i) {
     try {
       let mapped = {};
 
       ////////////////////////////////////////////////////////////
-      /// ✅ 1. FALLBACK FIRST (PRIMARY)
+      /// FALLBACK FIRST
       ////////////////////////////////////////////////////////////
 
       const fallback = mapRow(row);
       mapped = { ...fallback };
 
       ////////////////////////////////////////////////////////////
-      /// ✅ 2. AI MAPPING (FILL GAPS ONLY)
+      /// AI (FILL GAPS ONLY)
       ////////////////////////////////////////////////////////////
 
       if (Object.keys(normalizedMapping).length > 0) {
         for (const key of headers) {
           const target = normalizedMapping[normalizeHeaderKey(key)];
 
-          if (
-            target &&
-            STANDARD_FIELDS.includes(target) &&
-            !mapped[target] // 👈 don't overwrite fallback
-          ) {
+          if (target && STANDARD_FIELDS.includes(target) && !mapped[target]) {
             mapped[target] = row[key];
           }
         }
@@ -302,7 +282,7 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
       const phone = normalizePhone(mapped.phone) || undefined;
 
       ////////////////////////////////////////////////////////////
-      /// DUPLICATE (CSV)
+      /// DUPLICATE
       ////////////////////////////////////////////////////////////
 
       const uniqueKey = email || phone;
@@ -312,9 +292,6 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
           return {
             row: i + 1,
             status: "duplicate_csv",
-            name: mapped.name || null,
-            email: email || null,
-            phone: phone || null,
           };
         }
         seen.add(uniqueKey);
@@ -328,7 +305,6 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
         return {
           row: i + 1,
           status: "skipped",
-          reason: "No email/phone",
         };
       }
 
@@ -345,31 +321,23 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
         return {
           row: i + 1,
           status: "skipped",
-          reason: "Invalid candidate",
         };
       }
-
-      const candidate = result.candidate;
 
       return {
         row: i + 1,
         status: result.isNew ? "created" : "duplicate_db",
-        candidateId: candidate.id,
-        name: candidate.name || mapped.name || null,
-        email: candidate.email || email || null,
-        phone: candidate.phone || phone || null,
       };
     } catch (err) {
       return {
         row: i + 1,
         status: "error",
-        error: err.message,
       };
     }
   }
 
   ////////////////////////////////////////////////////////////
-  /// PROCESS (SAFE FOR LARGE FILES)
+  /// PROCESS
   ////////////////////////////////////////////////////////////
 
   const processed = [];
