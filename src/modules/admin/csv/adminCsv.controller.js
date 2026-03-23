@@ -1,11 +1,8 @@
-const csvService = require("./adminCsv.service");
+const prisma = require("../../../config/prisma");
 
+const resumeQueue = require("../../../queues/resume.queue");
 const { uploadToR2 } = require("../../../utils/uploadToR2");
 
-const os = require("os");
-const path = require("path");
-const fs = require("fs");
-const axios = require("axios");
 ////////////////////////////////////////////////////////////
 /// MAIN CONTROLLER
 ////////////////////////////////////////////////////////////
@@ -37,27 +34,68 @@ async function uploadCSV(req, res) {
     }
 
     ////////////////////////////////////////////////////////////
-    /// DOWNLOAD TO TEMP
+    /// CREATE JOB (same as resume flow)
     ////////////////////////////////////////////////////////////
 
-    const { summary, results } = await csvService.processCSVBuffer(
-      req.file.buffer,
-      req.file.originalname,
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: "CSV processed",
-      ...summary,
-      results,
+    const job = await prisma.uploadJob.create({
+      data: {
+        type: "CSV_UPLOAD",
+        status: "processing",
+      },
     });
+
+    ////////////////////////////////////////////////////////////
+    /// RESPOND IMMEDIATELY 🚀
+    ////////////////////////////////////////////////////////////
+
+    res.status(200).json({
+      success: true,
+      message: "CSV upload started",
+      jobId: job.id,
+    });
+
+    ////////////////////////////////////////////////////////////
+    /// ADD TO QUEUE (AFTER RESPONSE)
+    ////////////////////////////////////////////////////////////
+
+    resumeQueue
+      .add(
+        "csvUpload", // 👈 IMPORTANT (must match worker)
+        {
+          jobId: job.id,
+          fileUrl: r2Url,
+          fileName: req.file.originalname,
+        },
+        {
+          attempts: 3,
+          backoff: {
+            type: "exponential",
+            delay: 5000,
+          },
+          removeOnComplete: true,
+          removeOnFail: false,
+        },
+      )
+      .catch(async (err) => {
+        console.error("CSV Queue add failed:", err);
+
+        try {
+          await prisma.uploadJob.update({
+            where: { id: job.id },
+            data: {
+              status: "failed",
+            },
+          });
+        } catch (updateErr) {
+          console.error("Failed to update job status:", updateErr);
+        }
+      });
   } catch (error) {
     console.error("CSV upload error:", error);
 
     return res.status(500).json({
       success: false,
       message: "Internal server error",
-      error: error.message,
     });
   }
 }
