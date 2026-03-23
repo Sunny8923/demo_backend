@@ -34,15 +34,18 @@ async function uploadCSV(req, res) {
     }
 
     ////////////////////////////////////////////////////////////
-    /// CREATE JOB (same as resume flow)
+    /// CREATE JOB (MATCHES YOUR SCHEMA ✅)
     ////////////////////////////////////////////////////////////
 
     const job = await prisma.uploadJob.create({
       data: {
-        type: "CSV_UPLOAD",
         status: "processing",
         total: 0,
         processed: 0,
+        created: 0,
+        duplicate: 0,
+        skipped: 0,
+        error: 0,
       },
     });
 
@@ -57,12 +60,12 @@ async function uploadCSV(req, res) {
     });
 
     ////////////////////////////////////////////////////////////
-    /// ADD TO QUEUE (AFTER RESPONSE)
+    /// ADD TO QUEUE
     ////////////////////////////////////////////////////////////
 
     resumeQueue
       .add(
-        "csvUpload", // 👈 IMPORTANT (must match worker)
+        "csvUpload",
         {
           jobId: job.id,
           fileUrl: r2Url,

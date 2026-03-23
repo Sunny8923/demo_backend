@@ -27,7 +27,7 @@ const worker = new Worker(
     }
 
     ////////////////////////////////////////////////////////////
-    /// ✅ CSV JOB (NEW)
+    /// ✅ CSV JOB (FIXED)
     ////////////////////////////////////////////////////////////
     if (job.name === "csvUpload") {
       const { jobId, fileUrl, fileName } = job.data;
@@ -35,7 +35,7 @@ const worker = new Worker(
       console.log("Processing CSV job:", jobId);
 
       ////////////////////////////////////////////////////////////
-      /// 1. DOWNLOAD FILE FROM R2
+      /// 1. DOWNLOAD FILE
       ////////////////////////////////////////////////////////////
       const response = await axios.get(fileUrl, {
         responseType: "arraybuffer",
@@ -49,13 +49,19 @@ const worker = new Worker(
       const { summary } = await csvService.processCSVBuffer(buffer, fileName);
 
       ////////////////////////////////////////////////////////////
-      /// 3. UPDATE JOB STATUS
+      /// 3. UPDATE JOB (MATCHES YOUR SCHEMA ✅)
       ////////////////////////////////////////////////////////////
       await prisma.uploadJob.update({
         where: { id: jobId },
         data: {
           status: "completed",
-          meta: summary,
+          total: summary.total,
+          processed: summary.total,
+          created: summary.created,
+          duplicate: summary.duplicate,
+          skipped: summary.skipped,
+          error: summary.error,
+          results: summary, // optional but useful
         },
       });
 
@@ -90,7 +96,7 @@ worker.on("failed", async (job, err) => {
         where: { id: job.data.jobId },
         data: {
           status: "failed",
-          error: err.message, // ✅ added for better debugging
+          error: 1, // schema expects Int, not string ❗
         },
       });
     }
