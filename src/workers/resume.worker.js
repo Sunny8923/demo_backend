@@ -12,45 +12,41 @@ const connection = new IORedis(process.env.REDIS_URL, {
   enableReadyCheck: false,
 });
 
+console.log("🔥 WORKER FILE LOADED");
+console.log("🔥 WORKER LOADED CORRECTLY");
+
 const worker = new Worker(
   "resumeQueue",
   async (job) => {
     console.log("Processing job:", job.name, job.data?.jobId);
 
     ////////////////////////////////////////////////////////////
-    /// ✅ RESUME JOB (UNCHANGED)
+    /// ✅ RESUME JOB
     ////////////////////////////////////////////////////////////
     if (job.name === "resume-upload") {
+      console.log("✅ Resume job started");
+
       const { files, jobId, total } = job.data;
 
       return await resumeService.processResumes(files, jobId, job, total);
     }
 
     ////////////////////////////////////////////////////////////
-    /// ✅ CSV JOB (FIXED)
+    /// ✅ CSV JOB
     ////////////////////////////////////////////////////////////
     if (job.name === "csvUpload") {
       const { jobId, fileUrl, fileName } = job.data;
 
       console.log("Processing CSV job:", jobId);
 
-      ////////////////////////////////////////////////////////////
-      /// 1. DOWNLOAD FILE
-      ////////////////////////////////////////////////////////////
       const response = await axios.get(fileUrl, {
         responseType: "arraybuffer",
       });
 
       const buffer = Buffer.from(response.data);
 
-      ////////////////////////////////////////////////////////////
-      /// 2. PROCESS CSV
-      ////////////////////////////////////////////////////////////
       const { summary } = await csvService.processCSVBuffer(buffer, fileName);
 
-      ////////////////////////////////////////////////////////////
-      /// 3. UPDATE JOB (MATCHES YOUR SCHEMA ✅)
-      ////////////////////////////////////////////////////////////
       await prisma.uploadJob.update({
         where: { id: jobId },
         data: {
@@ -61,7 +57,7 @@ const worker = new Worker(
           duplicate: summary.duplicate,
           skipped: summary.skipped,
           error: summary.error,
-          results: summary, // optional but useful
+          results: summary,
         },
       });
 
@@ -69,9 +65,9 @@ const worker = new Worker(
     }
 
     ////////////////////////////////////////////////////////////
-    /// UNKNOWN JOB SAFETY
+    /// UNKNOWN JOB
     ////////////////////////////////////////////////////////////
-    console.warn("Unknown job type:", job.name);
+    console.warn("❌ Unknown job type:", job.name);
   },
   {
     connection,
@@ -96,7 +92,7 @@ worker.on("failed", async (job, err) => {
         where: { id: job.data.jobId },
         data: {
           status: "failed",
-          error: 1, // schema expects Int, not string ❗
+          error: 1,
         },
       });
     }
