@@ -242,7 +242,7 @@ async function processFile(file) {
         const trimmed = val.toString().trim();
 
         if (trimmed === "") {
-          delete mapped[k]; // 🔥 remove empty fields
+          delete mapped[k]; // 🔥 REMOVE empty values completely
         } else {
           mapped[k] = trimmed;
         }
