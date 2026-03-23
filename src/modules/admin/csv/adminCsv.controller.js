@@ -41,6 +41,8 @@ async function uploadCSV(req, res) {
       data: {
         type: "CSV_UPLOAD",
         status: "processing",
+        total: 0,
+        processed: 0,
       },
     });
 
