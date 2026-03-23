@@ -1,10 +1,5 @@
 require("dotenv").config();
 
-////////////////////////////////////////////////////////////
-/// START WORKER (EXPLICIT)
-////////////////////////////////////////////////////////////
-require("./workers/resume.worker"); // ✅ FIX
-
 const app = require("./app");
 const recoverJobs = require("./scripts/recoverJobs");
 
