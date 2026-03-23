@@ -13,11 +13,22 @@ const multer = require("multer");
 ////////////////////////////////////////////////////////////
 
 const upload = multer({
-  storage: multer.memoryStorage(), // ✅ FIXED
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // ✅ 10MB limit (adjustable)
+  },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype !== "text/csv" && !file.originalname.endsWith(".csv")) {
-      return cb(new Error("Only CSV files allowed"), false);
+    const allowed =
+      file.mimetype === "text/csv" ||
+      file.mimetype ===
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || // xlsx
+      file.mimetype === "application/vnd.ms-excel" || // xls
+      file.originalname.match(/\.(csv|xlsx|xls)$/);
+
+    if (!allowed) {
+      return cb(new Error("Only CSV/XLS/XLSX files allowed"), false);
     }
+
     cb(null, true);
   },
 });

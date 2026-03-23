@@ -1,9 +1,9 @@
-const fs = require("fs");
 const csv = require("csv-parser");
+const XLSX = require("xlsx");
+const streamifier = require("streamifier");
 const openai = require("../../../config/openai");
 const pLimit = require("p-limit").default;
 
-// ✅ shared candidate service
 const candidateService = require("../services/candidate.service");
 
 ////////////////////////////////////////////////////////////
@@ -53,7 +53,7 @@ function generateHeaderKey(headers) {
 }
 
 ////////////////////////////////////////////////////////////
-/// AI HEADER MAPPING
+/// AI HEADER MAPPING (IMPROVED)
 ////////////////////////////////////////////////////////////
 
 async function getHeaderMapping(headers) {
@@ -67,12 +67,19 @@ async function getHeaderMapping(headers) {
     const prompt = `
 You are an expert ATS parser.
 
-Map CSV headers to these fields only:
+Map ANY weird/unstructured CSV headers to closest matching fields.
+
+Allowed fields:
 ${STANDARD_FIELDS.join(", ")}
+
+Rules:
+- Map even vague headers (e.g. "where do you live" → currentLocation)
+- NEVER skip useful columns
+- If unsure, choose closest logical match
 
 Return JSON:
 {
-  "csv_column_name": "candidate_field"
+  "csv_column": "field"
 }
 
 Headers:
@@ -84,7 +91,7 @@ ${JSON.stringify(headers)}
       temperature: 0,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: "You map CSV headers." },
+        { role: "system", content: "You map CSV headers smartly." },
         { role: "user", content: prompt },
       ],
     });
@@ -160,7 +167,7 @@ function mapRow(row) {
 }
 
 function isValidEmail(email) {
-  return /\S+@\S+\.\S+/.test(email);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function normalizePhone(phone) {
@@ -169,231 +176,225 @@ function normalizePhone(phone) {
 }
 
 ////////////////////////////////////////////////////////////
-/// PROCESS CSV
+/// PROCESS FILE (STREAM SAFE)
 ////////////////////////////////////////////////////////////
 
-async function processCSV(filePath) {
+async function processFile(file) {
+  if (!file || !file.buffer) {
+    throw new Error("Invalid file");
+  }
+
+  if (file.buffer.length === 0) {
+    throw new Error("Empty file uploaded");
+  }
+
+  const isCSV = file.originalname.endsWith(".csv");
+
+  let headers = [];
+  let normalizedMapping = {};
+  let isFirstRow = true;
+
+  const seen = new Set();
+  const limit = pLimit(10);
   const results = [];
 
-  try {
-    ////////////////////////////////////////////////////////////
-    /// READ CSV
-    ////////////////////////////////////////////////////////////
+  let rowIndex = 0;
 
-    await new Promise((resolve, reject) => {
-      fs.createReadStream(filePath)
-        .pipe(csv())
-        .on("data", (row) => results.push(row))
-        .on("end", resolve)
-        .on("error", reject);
-    });
+  async function processRow(row) {
+    const i = rowIndex++;
 
-    if (results.length === 0) {
-      return { summary: {}, results: [] };
-    }
+    try {
+      let mapped = {};
 
-    const headers = Object.keys(results[0]).map((h) => h.trim());
+      ////////////////////////////////////////////////////////////
+      /// AI MAPPING
+      ////////////////////////////////////////////////////////////
 
-    ////////////////////////////////////////////////////////////
-    /// AI MAPPING
-    ////////////////////////////////////////////////////////////
+      for (const key of headers) {
+        const target = normalizedMapping[normalizeHeaderKey(key)];
 
-    const aiMapping = await getHeaderMapping(headers);
-
-    const normalizedMapping = {};
-
-    if (aiMapping) {
-      for (const key in aiMapping) {
-        normalizedMapping[normalizeHeaderKey(key)] = aiMapping[key];
+        if (target && STANDARD_FIELDS.includes(target)) {
+          mapped[target] = row[key];
+        }
       }
-    }
 
-    ////////////////////////////////////////////////////////////
-    /// DUPLICATE TRACKING
-    ////////////////////////////////////////////////////////////
+      ////////////////////////////////////////////////////////////
+      /// FALLBACK
+      ////////////////////////////////////////////////////////////
 
-    const seen = new Set();
+      const fallback = mapRow(row);
+      for (const key in fallback) {
+        if (!mapped[key]) mapped[key] = fallback[key];
+      }
 
-    ////////////////////////////////////////////////////////////
-    /// CONCURRENCY CONTROL
-    ////////////////////////////////////////////////////////////
+      ////////////////////////////////////////////////////////////
+      /// CLEAN
+      ////////////////////////////////////////////////////////////
 
-    const limit = pLimit(10);
+      Object.keys(mapped).forEach((k) => {
+        mapped[k] = mapped[k]?.toString().trim() || null;
+      });
 
-    async function processRow(row, i) {
-      try {
-        let mapped = {};
+      const email = isValidEmail(mapped.email)
+        ? mapped.email.toLowerCase()
+        : undefined;
 
-        ////////////////////////////////////////////////////////////
-        /// AI MAPPING
-        ////////////////////////////////////////////////////////////
+      const phone = normalizePhone(mapped.phone) || undefined;
 
-        if (Object.keys(normalizedMapping).length > 0) {
-          for (const key of headers) {
-            const target = normalizedMapping[normalizeHeaderKey(key)];
+      ////////////////////////////////////////////////////////////
+      /// DUPLICATE CHECK
+      ////////////////////////////////////////////////////////////
 
-            if (target && STANDARD_FIELDS.includes(target)) {
-              mapped[target] = row[key];
-            }
-          }
-        }
+      const uniqueKey = email || phone;
 
-        ////////////////////////////////////////////////////////////
-        /// FALLBACK MAPPING
-        ////////////////////////////////////////////////////////////
-
-        const fallback = mapRow(row);
-
-        for (const key in fallback) {
-          if (!mapped[key]) mapped[key] = fallback[key];
-        }
-
-        ////////////////////////////////////////////////////////////
-        /// CLEAN DATA
-        ////////////////////////////////////////////////////////////
-
-        Object.keys(mapped).forEach((k) => {
-          mapped[k] = mapped[k]?.toString().trim() || null;
-        });
-
-        const email = isValidEmail(mapped.email)
-          ? mapped.email.toLowerCase()
-          : undefined;
-
-        const phone = normalizePhone(mapped.phone) || undefined;
-
-        ////////////////////////////////////////////////////////////
-        /// DUPLICATE CHECK (WITHIN CSV)
-        ////////////////////////////////////////////////////////////
-
-        const uniqueKey = email || phone;
-
-        if (uniqueKey) {
-          if (seen.has(uniqueKey)) {
-            return {
-              row: i + 1,
-              status: "duplicate",
-              reason: "Duplicate in CSV",
-
-              name: mapped.name || null,
-              email: email || null,
-              phone: phone || null,
-            };
-          }
-          seen.add(uniqueKey);
-        }
-
-        ////////////////////////////////////////////////////////////
-        /// VALIDATION
-        ////////////////////////////////////////////////////////////
-
-        if (!email && !phone) {
+      if (uniqueKey) {
+        if (seen.has(uniqueKey)) {
           return {
             row: i + 1,
-            status: "skipped",
-            reason: "No email/phone",
-
-            name: mapped.name || null,
-            email: null,
-            phone: null,
-          };
-        }
-
-        ////////////////////////////////////////////////////////////
-        /// CREATE / FIND CANDIDATE
-        ////////////////////////////////////////////////////////////
-
-        const result = await candidateService.createOrFindCandidate(
-          mapped,
-          "ADMIN_CSV_UPLOAD",
-        );
-
-        if (!result) {
-          return {
-            row: i + 1,
-            status: "skipped",
-            reason: "Invalid candidate",
-
+            status: "duplicate",
+            reason: "Duplicate in file",
             name: mapped.name || null,
             email: email || null,
             phone: phone || null,
           };
         }
+        seen.add(uniqueKey);
+      }
 
-        ////////////////////////////////////////////////////////////
-        /// SUCCESS RESPONSE
-        ////////////////////////////////////////////////////////////
+      ////////////////////////////////////////////////////////////
+      /// VALIDATION
+      ////////////////////////////////////////////////////////////
 
-        const candidate = result.candidate;
-
+      if (!email && !phone) {
         return {
           row: i + 1,
-          status: result.isNew ? "created" : "duplicate",
-          candidateId: candidate.id,
-
-          // ✅ BASIC INFO (IMPORTANT)
-          name: candidate.name || mapped.name || null,
-          email: candidate.email || email || null,
-          phone: candidate.phone || phone || null,
-
-          // 🔥 OPTIONAL FIELDS (UI GOLD)
-          experience: candidate.totalExperience ?? null,
-          currentCompany: candidate.currentCompany ?? null,
-          currentDesignation: candidate.currentDesignation ?? null,
-          skills: candidate.skills ?? null,
-        };
-      } catch (err) {
-        return {
-          row: i + 1,
-          status: "error",
-          error: err.message,
-
-          name: null,
-          email: null,
-          phone: null,
-
-          data: row, // keep for debugging
+          status: "skipped",
+          reason: "No email/phone",
+          name: mapped.name || null,
         };
       }
-    }
-    ////////////////////////////////////////////////////////////
-    /// PROCESS ALL ROWS
-    ////////////////////////////////////////////////////////////
 
-    const processed = await Promise.all(
-      results.map((row, i) => limit(() => processRow(row, i))),
-    );
+      ////////////////////////////////////////////////////////////
+      /// DB CALL
+      ////////////////////////////////////////////////////////////
+
+      const result = await candidateService.createOrFindCandidate(
+        mapped,
+        "ADMIN_UPLOAD",
+      );
+
+      if (!result) {
+        return {
+          row: i + 1,
+          status: "skipped",
+          reason: "Invalid candidate",
+        };
+      }
+
+      const candidate = result.candidate;
+
+      return {
+        row: i + 1,
+        status: result.isNew ? "created" : "duplicate",
+        candidateId: candidate.id,
+        name: candidate.name || mapped.name || null,
+        email: candidate.email || email || null,
+        phone: candidate.phone || phone || null,
+        experience: candidate.totalExperience ?? null,
+        currentCompany: candidate.currentCompany ?? null,
+        currentDesignation: candidate.currentDesignation ?? null,
+        skills: candidate.skills ?? null,
+      };
+    } catch (err) {
+      return {
+        row: i + 1,
+        status: "error",
+        error: err.message,
+      };
+    }
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// CSV STREAM
+  ////////////////////////////////////////////////////////////
+
+  try {
+    if (isCSV) {
+      const stream = streamifier.createReadStream(file.buffer).pipe(csv());
+
+      await new Promise((resolve, reject) => {
+        stream
+          .on("data", async (row) => {
+            stream.pause();
+
+            if (isFirstRow) {
+              headers = Object.keys(row).map((h) => h.trim());
+
+              const aiMapping = await getHeaderMapping(headers);
+
+              if (aiMapping) {
+                for (const key in aiMapping) {
+                  normalizedMapping[normalizeHeaderKey(key)] = aiMapping[key];
+                }
+              }
+
+              isFirstRow = false;
+            }
+
+            const result = await limit(() => processRow(row));
+            results.push(result);
+
+            stream.resume();
+          })
+          .on("end", resolve)
+          .on("error", reject);
+      });
+    } else {
+      ////////////////////////////////////////////////////////////
+      /// XLS / XLSX
+      ////////////////////////////////////////////////////////////
+
+      const workbook = XLSX.read(file.buffer, { type: "buffer" });
+
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      if (!rows.length) throw new Error("Empty Excel file");
+
+      headers = Object.keys(rows[0]);
+
+      const aiMapping = await getHeaderMapping(headers);
+
+      if (aiMapping) {
+        for (const key in aiMapping) {
+          normalizedMapping[normalizeHeaderKey(key)] = aiMapping[key];
+        }
+      }
+
+      for (const row of rows) {
+        const result = await limit(() => processRow(row));
+        results.push(result);
+      }
+    }
 
     ////////////////////////////////////////////////////////////
     /// SUMMARY
     ////////////////////////////////////////////////////////////
 
     const summary = {
-      total: processed.length,
-      created: processed.filter((r) => r.status === "created").length,
-      duplicate: processed.filter((r) => r.status === "duplicate").length,
-      skipped: processed.filter((r) => r.status === "skipped").length,
-      error: processed.filter((r) => r.status === "error").length,
+      total: results.length,
+      created: results.filter((r) => r.status === "created").length,
+      duplicate: results.filter((r) => r.status === "duplicate").length,
+      skipped: results.filter((r) => r.status === "skipped").length,
+      error: results.filter((r) => r.status === "error").length,
     };
 
-    return { summary, results: processed };
+    return { summary, results };
   } catch (err) {
-    throw err;
-  } finally {
-    ////////////////////////////////////////////////////////////
-    /// CLEANUP (SAFE)
-    ////////////////////////////////////////////////////////////
-
-    try {
-      if (filePath) {
-        fs.unlinkSync(filePath); // ✅ works for temp files
-      }
-    } catch (cleanupErr) {
-      console.error("File cleanup failed:", cleanupErr.message);
-    }
+    throw new Error("Invalid or corrupted file");
   }
 }
 
 module.exports = {
-  processCSV,
+  processFile,
 };

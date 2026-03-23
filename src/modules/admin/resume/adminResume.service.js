@@ -642,11 +642,12 @@ async function processResumes(files, jobId, job, total) {
   ////////////////////////////////////////////////////////////
   /// FINAL STATUS
   ////////////////////////////////////////////////////////////
+  const MAX_PREVIEW = 100;
   await prisma.uploadJob.update({
     where: { id: jobId },
     data: {
       status: "completed",
-      results: processed,
+      results: processed.slice(0, MAX_PREVIEW),
       currentFile: "Completed",
     },
   });

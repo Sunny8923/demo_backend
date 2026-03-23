@@ -1,36 +1,7 @@
 const csvService = require("./adminCsv.service");
 
-const { uploadToR2 } = require("../../../utils/uploadToR2");
-
-const os = require("os");
-const path = require("path");
-const fs = require("fs");
-const axios = require("axios");
-
 ////////////////////////////////////////////////////////////
-/// DOWNLOAD R2 → TEMP FILE
-////////////////////////////////////////////////////////////
-
-async function downloadToTempFile(url, fileName) {
-  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${fileName}`);
-
-  const res = await axios.get(url, {
-    responseType: "stream",
-  });
-
-  const writer = fs.createWriteStream(tempPath);
-
-  await new Promise((resolve, reject) => {
-    res.data.pipe(writer);
-    writer.on("finish", resolve);
-    writer.on("error", reject);
-  });
-
-  return tempPath;
-}
-
-////////////////////////////////////////////////////////////
-/// MAIN CONTROLLER
+/// MAIN CONTROLLER (OPTIMIZED)
 ////////////////////////////////////////////////////////////
 
 async function uploadCSV(req, res) {
@@ -42,47 +13,71 @@ async function uploadCSV(req, res) {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: "No CSV file uploaded",
+        message: "No file uploaded",
       });
     }
 
     ////////////////////////////////////////////////////////////
-    /// UPLOAD TO R2
+    /// FILE SIZE SAFETY
     ////////////////////////////////////////////////////////////
 
-    const r2Url = await uploadToR2(req.file);
-
-    if (!r2Url) {
-      return res.status(500).json({
+    if (req.file.size > 10 * 1024 * 1024) {
+      return res.status(400).json({
         success: false,
-        message: "CSV upload failed",
+        message: "File too large. Max 10MB allowed",
       });
     }
 
     ////////////////////////////////////////////////////////////
-    /// DOWNLOAD TO TEMP
+    /// PROCESS FILE
     ////////////////////////////////////////////////////////////
 
-    const tempPath = await downloadToTempFile(r2Url, req.file.originalname);
+    const { summary, results } = await csvService.processFile(req.file);
 
     ////////////////////////////////////////////////////////////
-    /// PROCESS CSV (UNCHANGED LOGIC)
+    /// RESPONSE (NON-BREAKING)
     ////////////////////////////////////////////////////////////
 
-    const { summary, results } = await csvService.processCSV(tempPath);
+    const MAX_PREVIEW = 100;
+    const previewResults = results.slice(0, MAX_PREVIEW);
 
     return res.status(200).json({
       success: true,
-      message: "CSV processed",
+      message: "File processed successfully",
+
       ...summary,
-      results,
+
+      results: previewResults, // ✅ same key, limited data
+
+      meta: {
+        totalResults: results.length,
+        returnedResults: previewResults.length,
+        hasMore: results.length > MAX_PREVIEW,
+      },
     });
   } catch (error) {
     console.error("CSV upload error:", error);
 
+    ////////////////////////////////////////////////////////////
+    /// CLEAN ERROR HANDLING
+    ////////////////////////////////////////////////////////////
+
+    let message = "Internal server error";
+
+    if (
+      error.message?.includes("Invalid") ||
+      error.message?.includes("corrupted")
+    ) {
+      message = "Invalid or corrupted file";
+    } else if (error.message?.includes("Empty")) {
+      message = "Uploaded file is empty";
+    } else if (error.message?.includes("Only")) {
+      message = error.message;
+    }
+
     return res.status(500).json({
       success: false,
-      message: "Internal server error",
+      message,
       error: error.message,
     });
   }
