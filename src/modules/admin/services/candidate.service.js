@@ -66,30 +66,15 @@ function normalizeSkills(skills) {
 }
 
 function resolveTotalExperience(data) {
-  ////////////////////////////////////////////////////////////
-  /// 1. TRY STRUCTURED EXPERIENCE (BEST SOURCE)
-  ////////////////////////////////////////////////////////////
-
   if (Array.isArray(data.experience) && data.experience.length > 0) {
     const cleaned = cleanExperience(data.experience);
     const calculated = calculateTotalExperience(cleaned);
 
-    if (calculated !== null) {
-      return calculated;
-    }
+    if (calculated !== null) return calculated;
   }
 
-  ////////////////////////////////////////////////////////////
-  /// 2. FALLBACK → AI VALUE
-  ////////////////////////////////////////////////////////////
-
   const parsed = parseExperience(data.totalExperience);
-
   if (parsed !== null) return parsed;
-
-  ////////////////////////////////////////////////////////////
-  /// 3. FINAL FALLBACK
-  ////////////////////////////////////////////////////////////
 
   return null;
 }
@@ -108,7 +93,6 @@ function mergeSkills(oldSkills, newSkills) {
   const newArr = newSkills ? newSkills.split(",") : [];
 
   const merged = [...new Set([...oldArr, ...newArr])];
-
   return merged.filter(Boolean).join(", ");
 }
 
@@ -146,16 +130,10 @@ function buildUpdateData(existing, data, extra) {
     department: mergeValues(existing.department, data.department),
     industry: mergeValues(existing.industry, data.industry),
 
-    ////////////////////////////////////////////////////////////
-    /// SKILLS
-    ////////////////////////////////////////////////////////////
-
     skills: mergedSkills,
     skillsArray: mergedSkills
       ? mergedSkills.split(",").map((s) => s.trim().toLowerCase())
       : existing.skillsArray || [],
-
-    ////////////////////////////////////////////////////////////
 
     currentSalary: existing.currentSalary ?? parseSalary(data.currentSalary),
     expectedSalary: existing.expectedSalary ?? parseSalary(data.expectedSalary),
@@ -223,28 +201,6 @@ async function createOrFindCandidate(data, source, extra = {}) {
 
   const normalizedSkills = normalizeSkills(data.skills);
 
-  ////////////////////////////////////////////////////////////
-  /// 🔥 EMBEDDING (ONLY HERE)
-  ////////////////////////////////////////////////////////////
-
-  const candidateText = buildCandidateEmbeddingText({
-    skillsArray: normalizedSkills
-      ? normalizedSkills.split(",").map((s) => s.trim())
-      : [],
-    totalExperience: resolveTotalExperience(data),
-    currentRole: data.currentDesignation,
-  });
-
-  let embedding = null;
-
-  try {
-    embedding = await getEmbedding(candidateText);
-  } catch (err) {
-    console.error("Embedding failed:", err.message);
-  }
-
-  ////////////////////////////////////////////////////////////
-
   const created = await prisma.candidate.create({
     data: {
       name: data.name || "Unknown",
@@ -278,17 +234,40 @@ async function createOrFindCandidate(data, source, extra = {}) {
       resumeText: extra.resumeText || null,
       resumeHash: extra.resumeHash || null,
 
-      ////////////////////////////////////////////////////////////
-      /// 🔥 SAVE EMBEDDING
-      ////////////////////////////////////////////////////////////
-
-      embedding,
-
-      ////////////////////////////////////////////////////////////
+      // ❌ NO EMBEDDING HERE (non-blocking now)
+      embedding: null,
 
       source,
     },
   });
+
+  ////////////////////////////////////////////////////////////
+  /// 🔥 ASYNC EMBEDDING (NON-BLOCKING + SAFE)
+  ////////////////////////////////////////////////////////////
+
+  const candidateText = buildCandidateEmbeddingText({
+    skillsArray: normalizedSkills
+      ? normalizedSkills.split(",").map((s) => s.trim())
+      : [],
+    totalExperience: resolveTotalExperience(data),
+    currentRole: data.currentDesignation,
+  });
+
+  getEmbedding(candidateText)
+    .then((res) => {
+      prisma.candidate
+        .updateMany({
+          where: {
+            id: created.id,
+            embedding: null, // ✅ prevent overwrite
+          },
+          data: { embedding: res },
+        })
+        .catch(() => {});
+    })
+    .catch(() => {});
+
+  ////////////////////////////////////////////////////////////
 
   return {
     candidate: created,

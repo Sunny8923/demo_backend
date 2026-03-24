@@ -218,7 +218,7 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
   try {
     aiMapping = await Promise.race([
       getHeaderMapping(headers),
-      new Promise((resolve) => setTimeout(() => resolve(null), 500)), // ⚡ max 500ms wait
+      new Promise((resolve) => setTimeout(() => resolve(null), 2000)), // ⚡ max 500ms wait
     ]);
   } catch (e) {
     aiMapping = null;
@@ -240,7 +240,7 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
   /// ⚡ INCREASED CONCURRENCY
   ////////////////////////////////////////////////////////////
 
-  const limit = pLimit(20);
+  const limit = pLimit(30);
 
   async function processRow(row, i) {
     try {
@@ -340,12 +340,9 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
   /// PROCESS
   ////////////////////////////////////////////////////////////
 
-  const processed = [];
-
-  for (let i = 0; i < results.length; i++) {
-    processed.push(await limit(() => processRow(results[i], i)));
-  }
-
+  const processed = await Promise.all(
+    results.map((row, i) => limit(() => processRow(row, i))),
+  );
   ////////////////////////////////////////////////////////////
   /// SUMMARY
   ////////////////////////////////////////////////////////////
