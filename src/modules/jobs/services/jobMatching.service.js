@@ -33,7 +33,6 @@ function calculateScore(candidate, job) {
 
   if (job.minExperience && candidate.totalExperience) {
     const ratio = candidate.totalExperience / job.minExperience;
-
     score += Math.min(ratio, 1.5) * 20;
   }
 
@@ -128,12 +127,10 @@ async function matchCandidatesToJob(jobId) {
   if (!job) throw new Error("Job not found");
 
   ////////////////////////////////////////////////////////////
-  // SAFETY: JOB MUST HAVE EMBEDDING
+  // ✅ FIX: HANDLE MISSING EMBEDDING
   ////////////////////////////////////////////////////////////
 
-  if (!job.embedding) {
-    throw new Error("Job embedding missing (run backfill)");
-  }
+  const hasEmbedding = !!job.embedding;
 
   ////////////////////////////////////////////////////////////
   // NORMALIZE JOB SKILLS
@@ -142,7 +139,7 @@ async function matchCandidatesToJob(jobId) {
   const normalizedJobSkills = normalizeSkillsArray(job.skillsArray || []);
 
   ////////////////////////////////////////////////////////////
-  // GET CANDIDATES (PRE-FILTERED)
+  // GET CANDIDATES (SMART FILTER)
   ////////////////////////////////////////////////////////////
 
   const candidates = await prisma.candidate.findMany({
@@ -150,9 +147,9 @@ async function matchCandidatesToJob(jobId) {
       skillsArray: {
         hasSome: job.skillsArray || [],
       },
-      embedding: {
-        not: null,
-      },
+      ...(hasEmbedding && {
+        embedding: { not: null },
+      }),
     },
     take: 200,
   });
@@ -175,22 +172,26 @@ async function matchCandidatesToJob(jobId) {
     const baseScore = calculateScore(candidate, job);
 
     ////////////////////////////////////////////////////////////
-    // SEMANTIC SCORE
+    // SEMANTIC SCORE (SAFE)
     ////////////////////////////////////////////////////////////
 
     let semanticScore = 0;
 
-    try {
-      semanticScore = cosineSimilarity(job.embedding, candidate.embedding);
-    } catch (err) {
-      console.error("Similarity error:", err.message);
+    if (hasEmbedding && candidate.embedding) {
+      try {
+        semanticScore = cosineSimilarity(job.embedding, candidate.embedding);
+      } catch (err) {
+        console.error("Similarity error:", err.message);
+      }
     }
 
     ////////////////////////////////////////////////////////////
-    // FINAL SCORE
+    // FINAL SCORE (FIXED WEIGHTING)
     ////////////////////////////////////////////////////////////
 
-    const finalScore = baseScore * 0.6 + semanticScore * 40;
+    const finalScore = hasEmbedding
+      ? baseScore * 0.6 + semanticScore * 100 * 0.4
+      : baseScore;
 
     ////////////////////////////////////////////////////////////
     // MATCHED + MISSING SKILLS

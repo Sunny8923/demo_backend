@@ -7,6 +7,8 @@ const {
   buildJobEmbeddingText,
 } = require("../../utils/embedding");
 
+const resumeQueue = require("../../queues/resume.queue");
+
 ////////////////////////////////////////////////////////
 // STANDARD FIELDS
 ////////////////////////////////////////////////////////
@@ -328,15 +330,10 @@ async function createJobsFromCSV(filePath, createdById) {
             const usedFields = new Set();
 
             try {
-              ////////////////////////////////////////////////////
-              // AI MAPPING
-              ////////////////////////////////////////////////////
-
               const aiMapped = {};
 
               for (const key in row) {
                 const normalizedKey = key.toLowerCase().replace(/\s+/g, "");
-
                 const target = normalizedMapping[normalizedKey];
 
                 if (target && STANDARD_JOB_FIELDS.includes(target)) {
@@ -345,10 +342,6 @@ async function createJobsFromCSV(filePath, createdById) {
               }
 
               const normalizedSkills = normalizeSkills(aiMapped.skills);
-
-              ////////////////////////////////////////////////////
-              // FINAL JOB OBJECT
-              ////////////////////////////////////////////////////
 
               const job = {
                 jrCode:
@@ -394,23 +387,18 @@ async function createJobsFromCSV(filePath, createdById) {
                       .split(",")
                       .map((s) => s.trim().toLowerCase())
                   : [],
-                education: safeString(aiMapped.education),
 
+                education: safeString(aiMapped.education),
                 status: normalizeStatus(aiMapped.status),
 
                 requestDate: safeDate(aiMapped.requestDate),
                 closureDate: safeDate(aiMapped.closureDate),
 
                 source: "CSV_UPLOAD",
-
                 createdById,
               };
 
               job.extraData = extractExtraData(row, usedFields);
-
-              ////////////////////////////////////////////////////
-              // VALIDATION
-              ////////////////////////////////////////////////////
 
               if (!job.title) {
                 skipped++;
@@ -420,10 +408,6 @@ async function createJobsFromCSV(filePath, createdById) {
                 });
                 continue;
               }
-
-              ////////////////////////////////////////////////////
-              // DUPLICATE CHECK
-              ////////////////////////////////////////////////////
 
               const duplicateKey =
                 `${job.title}-${job.companyName}-${job.location}`.toLowerCase();
@@ -453,9 +437,38 @@ async function createJobsFromCSV(filePath, createdById) {
           ////////////////////////////////////////////////////////
 
           const result = await prisma.job.createMany({
-            data: jobs,
+            data: jobs.map((j) => ({
+              ...j,
+              embedding: null,
+            })),
             skipDuplicates: true,
           });
+
+          ////////////////////////////////////////////////////////
+          // ✅ QUEUE EMBEDDING (NEW)
+          ////////////////////////////////////////////////////////
+
+          try {
+            const createdJobs = await prisma.job.findMany({
+              where: {
+                createdById,
+                embedding: null,
+              },
+              orderBy: { createdAt: "desc" },
+              take: jobs.length,
+            });
+
+            for (const jobItem of createdJobs) {
+              await resumeQueue.add("embedding", {
+                type: "job",
+                jobId: jobItem.id,
+              });
+            }
+          } catch (err) {
+            console.error("Embedding queue failed:", err.message);
+          }
+
+          ////////////////////////////////////////////////////////
 
           resolve({
             success: true,
@@ -478,6 +491,36 @@ async function createJobsFromCSV(filePath, createdById) {
   });
 }
 
+async function processJobEmbeddings(jobs) {
+  for (const job of jobs) {
+    try {
+      const normalizedSkills = job.skills
+        ? job.skills.split(",").map((s) => s.trim())
+        : [];
+
+      const jobText = buildJobEmbeddingText({
+        title: job.title,
+        skillsArray: normalizedSkills,
+        minExperience: safeInt(job.minExperience),
+      });
+
+      const embedding = await getEmbedding(jobText);
+
+      await prisma.job.updateMany({
+        where: {
+          title: job.title,
+          companyName: job.companyName,
+          location: job.location,
+        },
+        data: {
+          embedding,
+        },
+      });
+    } catch (err) {
+      console.error("Single job embedding failed:", err.message);
+    }
+  }
+}
 ////////////////////////////////////////////////////////
 // GET JOB BY ID
 ////////////////////////////////////////////////////////

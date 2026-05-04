@@ -1,3 +1,4 @@
+require("dotenv").config();
 const { Worker } = require("bullmq");
 const IORedis = require("ioredis");
 const prisma = require("../config/prisma");
@@ -18,7 +19,7 @@ console.log("🔥 WORKER LOADED CORRECTLY");
 const worker = new Worker(
   "resumeQueue",
   async (job) => {
-    console.log("Processing job:", job.name, job.data?.jobId);
+    console.log("Processing job:", job.name, job.data);
 
     ////////////////////////////////////////////////////////////
     /// ✅ RESUME JOB
@@ -32,12 +33,12 @@ const worker = new Worker(
     }
 
     ////////////////////////////////////////////////////////////
-    /// ✅ CSV JOB
+    /// ✅ CSV JOB (CANDIDATE CSV)
     ////////////////////////////////////////////////////////////
     if (job.name === "csvUpload") {
       const { jobId, fileUrl, fileName } = job.data;
 
-      console.log("Processing CSV job:", jobId);
+      console.log("📄 Processing CSV job:", jobId);
 
       const response = await axios.get(fileUrl, {
         responseType: "arraybuffer",
@@ -65,6 +66,89 @@ const worker = new Worker(
     }
 
     ////////////////////////////////////////////////////////////
+    /// ✅ EMBEDDING JOB (NEW - VERY IMPORTANT)
+    ////////////////////////////////////////////////////////////
+    if (job.name === "embedding") {
+      const { type, candidateId, jobId } = job.data;
+
+      console.log("🧠 Embedding job:", type, candidateId || jobId);
+
+      try {
+        ////////////////////////////////////////////////////////////
+        /// 🔹 CANDIDATE EMBEDDING
+        ////////////////////////////////////////////////////////////
+        if (type === "candidate") {
+          const candidate = await prisma.candidate.findUnique({
+            where: { id: candidateId },
+          });
+
+          if (!candidate) return;
+
+          // avoid duplicate work
+          if (candidate.embedding) return;
+
+          const {
+            buildCandidateEmbeddingText,
+            getEmbedding,
+          } = require("../utils/embedding");
+
+          const text = buildCandidateEmbeddingText({
+            skillsArray: candidate.skillsArray || [],
+            totalExperience: candidate.totalExperience,
+            currentRole: candidate.currentDesignation,
+          });
+
+          const embedding = await getEmbedding(text);
+
+          await prisma.candidate.update({
+            where: { id: candidateId },
+            data: { embedding },
+          });
+
+          console.log("✅ Candidate embedding done:", candidateId);
+        }
+
+        ////////////////////////////////////////////////////////////
+        /// 🔹 JOB EMBEDDING
+        ////////////////////////////////////////////////////////////
+        if (type === "job") {
+          const jobData = await prisma.job.findUnique({
+            where: { id: jobId },
+          });
+
+          if (!jobData) return;
+
+          if (jobData.embedding) return;
+
+          const {
+            buildJobEmbeddingText,
+            getEmbedding,
+          } = require("../utils/embedding");
+
+          const text = buildJobEmbeddingText({
+            title: jobData.title,
+            skillsArray: jobData.skillsArray || [],
+            minExperience: jobData.minExperience,
+          });
+
+          const embedding = await getEmbedding(text);
+
+          await prisma.job.update({
+            where: { id: jobId },
+            data: { embedding },
+          });
+
+          console.log("✅ Job embedding done:", jobId);
+        }
+
+        return;
+      } catch (err) {
+        console.error("❌ Embedding failed:", err.message);
+        throw err; // important for retry
+      }
+    }
+
+    ////////////////////////////////////////////////////////////
     /// UNKNOWN JOB
     ////////////////////////////////////////////////////////////
     console.warn("❌ Unknown job type:", job.name);
@@ -80,11 +164,11 @@ const worker = new Worker(
 ////////////////////////////////////////////////////////////
 
 worker.on("completed", async (job) => {
-  console.log(`Job ${job.id} completed`);
+  console.log(`✅ Job ${job.id} completed`);
 });
 
 worker.on("failed", async (job, err) => {
-  console.error(`Job ${job.id} failed:`, err.message);
+  console.error(`❌ Job ${job.id} failed:`, err.message);
 
   try {
     if (job?.data?.jobId) {
@@ -102,5 +186,5 @@ worker.on("failed", async (job, err) => {
 });
 
 worker.on("stalled", (jobId) => {
-  console.warn(`Job stalled: ${jobId}`);
+  console.warn(`⚠️ Job stalled: ${jobId}`);
 });

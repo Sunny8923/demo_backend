@@ -1,12 +1,11 @@
 const prisma = require("../../../config/prisma");
 const {
-  getEmbedding,
-  buildCandidateEmbeddingText,
-} = require("../../../utils/embedding");
-const {
   cleanExperience,
   calculateTotalExperience,
 } = require("../../../utils/experience");
+
+const resumeQueue = require("../../../queues/resume.queue");
+const embeddingQueue = require("../../../queues/embedding.queue");
 
 ////////////////////////////////////////////////////////////
 /// HELPERS
@@ -157,17 +156,36 @@ function buildUpdateData(existing, data, extra) {
 ////////////////////////////////////////////////////////////
 
 async function createOrFindCandidate(data, source, extra = {}) {
+  console.log("\n🔥 ===== createOrFindCandidate CALLED =====");
+
+  ////////////////////////////////////////////////////////////
+  /// INPUT DEBUG
+  ////////////////////////////////////////////////////////////
+  console.log("📥 Incoming data:", {
+    email: data.email,
+    phone: data.phone,
+  });
+
   const email = isValidEmail(data.email)
     ? data.email.toLowerCase().trim()
     : null;
 
   const phone = normalizePhone(data.phone);
 
-  if (!email && !phone) return null;
+  console.log("📌 Normalized:", { email, phone });
+
+  ////////////////////////////////////////////////////////////
+  /// EARLY EXIT CHECK
+  ////////////////////////////////////////////////////////////
+  if (!email && !phone) {
+    console.log("❌ Skipping candidate — no email & no phone");
+    return null;
+  }
 
   ////////////////////////////////////////////////////////////
   /// CHECK EXISTING
   ////////////////////////////////////////////////////////////
+  console.log("🔍 Checking existing candidate...");
 
   const existing = await prisma.candidate.findFirst({
     where: {
@@ -182,12 +200,15 @@ async function createOrFindCandidate(data, source, extra = {}) {
   ////////////////////////////////////////////////////////////
   /// UPDATE EXISTING
   ////////////////////////////////////////////////////////////
-
   if (existing) {
+    console.log("⚠️ Existing candidate found:", existing.id);
+
     const updated = await prisma.candidate.update({
       where: { id: existing.id },
       data: buildUpdateData(existing, data, extra),
     });
+
+    console.log("♻️ Candidate updated:", updated.id);
 
     return {
       candidate: updated,
@@ -198,6 +219,7 @@ async function createOrFindCandidate(data, source, extra = {}) {
   ////////////////////////////////////////////////////////////
   /// CREATE NEW
   ////////////////////////////////////////////////////////////
+  console.log("🆕 Creating new candidate...");
 
   const normalizedSkills = normalizeSkills(data.skills);
 
@@ -234,40 +256,42 @@ async function createOrFindCandidate(data, source, extra = {}) {
       resumeText: extra.resumeText || null,
       resumeHash: extra.resumeHash || null,
 
-      // ❌ NO EMBEDDING HERE (non-blocking now)
       embedding: null,
-
       source,
     },
   });
 
-  ////////////////////////////////////////////////////////////
-  /// 🔥 ASYNC EMBEDDING (NON-BLOCKING + SAFE)
-  ////////////////////////////////////////////////////////////
-
-  const candidateText = buildCandidateEmbeddingText({
-    skillsArray: normalizedSkills
-      ? normalizedSkills.split(",").map((s) => s.trim())
-      : [],
-    totalExperience: resolveTotalExperience(data),
-    currentRole: data.currentDesignation,
-  });
-
-  getEmbedding(candidateText)
-    .then((res) => {
-      prisma.candidate
-        .updateMany({
-          where: {
-            id: created.id,
-            embedding: null, // ✅ prevent overwrite
-          },
-          data: { embedding: res },
-        })
-        .catch(() => {});
-    })
-    .catch(() => {});
+  console.log("✅ Candidate created:", created.id);
 
   ////////////////////////////////////////////////////////////
+  /// QUEUE EMBEDDING
+  ////////////////////////////////////////////////////////////
+  try {
+    console.log("🚀 Adding embedding job for candidate:", created.id);
+
+    const job = await embeddingQueue.add(
+      "embedding",
+      {
+        type: "candidate",
+        candidateId: created.id,
+      },
+      {
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 3000,
+        },
+      },
+    );
+
+    console.log("✅ Embedding job added:", job.id);
+  } catch (err) {
+    console.error("❌ Failed to add embedding job:", err);
+  }
+
+  ////////////////////////////////////////////////////////////
+
+  console.log("🏁 ===== createOrFindCandidate END =====\n");
 
   return {
     candidate: created,

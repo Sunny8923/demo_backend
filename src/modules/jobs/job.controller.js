@@ -293,23 +293,9 @@ async function getJobById(req, res) {
 // CSV UPLOAD
 ////////////////////////////////////////////////////////
 
-async function downloadToTempFile(url, fileName) {
-  const tempPath = path.join(os.tmpdir(), `${Date.now()}-${fileName}`);
-
-  const res = await axios.get(url, { responseType: "stream" });
-
-  const writer = fs.createWriteStream(tempPath);
-
-  await new Promise((resolve, reject) => {
-    res.data.pipe(writer);
-    writer.on("finish", resolve);
-    writer.on("error", reject);
-  });
-
-  return tempPath;
-}
-
 async function uploadJobsCSV(req, res) {
+  let tempPath = null;
+
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -319,29 +305,21 @@ async function uploadJobsCSV(req, res) {
     }
 
     //////////////////////////////////////////////////////
-    // UPLOAD TO R2
+    // ✅ USE LOCAL FILE DIRECTLY
     //////////////////////////////////////////////////////
-    const r2Url = await uploadToR2(req.file);
+    tempPath = req.file.path;
 
-    if (!r2Url) {
-      return res.status(500).json({
-        success: false,
-        message: "CSV upload failed",
-      });
-    }
-
-    //////////////////////////////////////////////////////
-    // DOWNLOAD TO TEMP
-    //////////////////////////////////////////////////////
-    const tempPath = await downloadToTempFile(r2Url, req.file.originalname);
-
-    //////////////////////////////////////////////////////
-    // SAME LOGIC (UNCHANGED)
-    //////////////////////////////////////////////////////
     const result = await jobService.createJobsFromCSV(
       tempPath,
       req.user.userId,
     );
+
+    //////////////////////////////////////////////////////
+    // ✅ OPTIONAL: Upload to R2 (NON-BLOCKING)
+    //////////////////////////////////////////////////////
+    uploadToR2(req.file).catch((err) => {
+      console.error("R2 upload failed (non-blocking):", err.message);
+    });
 
     return res.json({
       success: result.success,
@@ -358,6 +336,17 @@ async function uploadJobsCSV(req, res) {
       success: false,
       message: error.message || "CSV upload failed",
     });
+  } finally {
+    //////////////////////////////////////////////////////
+    // ✅ CLEANUP TEMP FILE (VERY IMPORTANT)
+    //////////////////////////////////////////////////////
+    if (tempPath && fs.existsSync(tempPath)) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (err) {
+        console.error("Temp file cleanup failed:", err.message);
+      }
+    }
   }
 }
 ////////////////////////////////////////////////////////

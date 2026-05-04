@@ -244,19 +244,19 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
 
   async function processRow(row, i) {
     try {
+      console.log(`\n📄 ===== CSV ROW ${i + 1} START =====`);
+
       let mapped = {};
 
       ////////////////////////////////////////////////////////////
       /// FALLBACK FIRST
       ////////////////////////////////////////////////////////////
-
       const fallback = mapRow(row);
       mapped = { ...fallback };
 
       ////////////////////////////////////////////////////////////
       /// AI (FILL GAPS ONLY)
       ////////////////////////////////////////////////////////////
-
       if (Object.keys(normalizedMapping).length > 0) {
         for (const key of headers) {
           const target = normalizedMapping[normalizeHeaderKey(key)];
@@ -270,10 +270,11 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
       ////////////////////////////////////////////////////////////
       /// CLEAN
       ////////////////////////////////////////////////////////////
-
       Object.keys(mapped).forEach((k) => {
         mapped[k] = mapped[k]?.toString().trim() || null;
       });
+
+      console.log("📄 Mapped row:", mapped);
 
       const email = isValidEmail(mapped.email)
         ? mapped.email.toLowerCase()
@@ -281,14 +282,16 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
 
       const phone = normalizePhone(mapped.phone) || undefined;
 
+      console.log("📄 Normalized:", { email, phone });
+
       ////////////////////////////////////////////////////////////
       /// DUPLICATE
       ////////////////////////////////////////////////////////////
-
       const uniqueKey = email || phone;
 
       if (uniqueKey) {
         if (seen.has(uniqueKey)) {
+          console.log("⚠️ Duplicate in CSV");
           return {
             row: i + 1,
             status: "duplicate_csv",
@@ -300,8 +303,8 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
       ////////////////////////////////////////////////////////////
       /// VALIDATION
       ////////////////////////////////////////////////////////////
-
       if (!email && !phone) {
+        console.log("❌ Skipping — no email & phone");
         return {
           row: i + 1,
           status: "skipped",
@@ -311,31 +314,38 @@ async function processCSVBuffer(fileBuffer, fileName = "") {
       ////////////////////////////////////////////////////////////
       /// DB CALL
       ////////////////////////////////////////////////////////////
+      console.log("📄 Calling candidate service...");
 
       const result = await candidateService.createOrFindCandidate(
         mapped,
         "ADMIN_CSV_UPLOAD",
       );
 
+      console.log("📄 Candidate service result:", result);
+
       if (!result) {
+        console.log("❌ Candidate service returned null");
         return {
           row: i + 1,
           status: "skipped",
         };
       }
 
+      console.log(`📄 ===== CSV ROW ${i + 1} END =====`);
+
       return {
         row: i + 1,
         status: result.isNew ? "created" : "duplicate_db",
       };
     } catch (err) {
+      console.error("❌ CSV Row error:", err.message);
+
       return {
         row: i + 1,
         status: "error",
       };
     }
   }
-
   ////////////////////////////////////////////////////////////
   /// PROCESS
   ////////////////////////////////////////////////////////////
